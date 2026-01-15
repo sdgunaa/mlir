@@ -19,19 +19,9 @@ pixi install
   - `ffi/`: Low-level C-API bridge and ABI boundary.
   - `passes/`: Pass management and pipeline infrastructure.
   - `runtime/`: Execution engines and JIT/AOT support.
-- `docs/`: Comprehensive documentation.
-  - `architecture.md`: Detailed architectural overview.
-  - `ffi.md`: Deep dive into the Mojo-MLIR bridge.
-
-## Architecture
-
-The platform is built around three primary design goals:
-* **Native Power, Mojo Simplicity**: Leverage battle-tested MLIR/LLVM implementations while authoring compiler logic entirely in Mojo.
-* **Type-Safe IR Construction**: Robust, idiomatic Mojo APIs for IR manipulation.
-* **Architectural Stability**: Maintain a viable API across MLIR version upgrades.
 
 For more details, see [docs/architecture.md](docs/architecture.md).
 
 ## License
 
-[Add License Information Here]
+MIT License
