@@ -86,13 +86,29 @@ preflight_check() {
     step "Checking requirements..."
     
     local missing=()
-    for cmd in wget tar xz; do
+    for cmd in tar xz; do
         if command -v "$cmd" &> /dev/null; then
             success "$cmd is available"
         else
             missing+=("$cmd")
         fi
     done
+    
+    # Check for download tools (aria2c preferred, wget as fallback)
+    if command -v aria2c &> /dev/null; then
+        DOWNLOADER="aria2c"
+        success "aria2c is available ${GREEN}(turbo mode 🚀)${NC}"
+    elif command -v wget &> /dev/null; then
+        DOWNLOADER="wget"
+        success "wget is available"
+        info "${DIM}Tip: Install aria2c for up to 16x faster downloads${NC}"
+    elif command -v curl &> /dev/null; then
+        DOWNLOADER="curl"
+        success "curl is available"
+        info "${DIM}Tip: Install aria2c for up to 16x faster downloads${NC}"
+    else
+        missing+=("wget or curl or aria2c")
+    fi
     
     if [ ${#missing[@]} -gt 0 ]; then
         error "Missing required tools: ${missing[*]}. Please install them first."
@@ -106,12 +122,71 @@ preflight_check() {
 download_llvm() {
     step "Downloading LLVM/MLIR ${LLVM_VERSION}..."
     info "Source: ${DIM}${URL}${NC}"
-    info "This may take a few minutes ☕"
-    echo ""
     
-    if wget --progress=bar:force:noscroll "$URL" -O "$ARCHIVE" 2>&1; then
-        echo ""
-        success "Download complete! ($(du -h "$ARCHIVE" | cut -f1))"
+    local download_success=false
+    
+    case "$DOWNLOADER" in
+        aria2c)
+            # aria2c: Multi-connection download for maximum speed
+            # -x16: 16 connections per server
+            # -s16: Split file into 16 segments
+            # -k1M: Minimum split size 1MB
+            # --file-allocation=none: Don't pre-allocate (faster start)
+            info "Using ${GREEN}aria2c turbo mode${NC} (16 parallel connections) 🚀"
+            echo ""
+            if aria2c \
+                --max-connection-per-server=16 \
+                --split=16 \
+                --min-split-size=1M \
+                --file-allocation=none \
+                --continue=true \
+                --auto-file-renaming=false \
+                --console-log-level=notice \
+                --summary-interval=1 \
+                --out="$ARCHIVE" \
+                "$URL"; then
+                download_success=true
+            fi
+            ;;
+        wget)
+            # wget: Optimized single-connection download
+            info "Using wget (single connection)"
+            info "This may take a few minutes ☕"
+            echo ""
+            if wget \
+                --progress=bar:force:noscroll \
+                --tries=3 \
+                --timeout=30 \
+                --continue \
+                -O "$ARCHIVE" \
+                "$URL" 2>&1; then
+                download_success=true
+            fi
+            ;;
+        curl)
+            # curl: Alternative single-connection download
+            info "Using curl (single connection)"
+            info "This may take a few minutes ☕"
+            echo ""
+            if curl \
+                --progress-bar \
+                --retry 3 \
+                --retry-delay 5 \
+                --connect-timeout 30 \
+                --continue-at - \
+                -L \
+                -o "$ARCHIVE" \
+                "$URL"; then
+                download_success=true
+            fi
+            ;;
+    esac
+    
+    echo ""
+    if [ "$download_success" = true ] && [ -f "$ARCHIVE" ]; then
+        local file_size
+        file_size=$(du -h "$ARCHIVE" | cut -f1)
+        success "Download complete! (${file_size})"
     else
         error "Download failed. Please check your internet connection or verify the version exists."
     fi
