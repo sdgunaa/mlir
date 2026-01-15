@@ -1,5 +1,5 @@
 [workspace]
-authors = ["guna-sd <sdgunaseker@gmail.com>"]
+authors = ["sdgunaa <sdgunaseker@gmail.com>"]
 channels = ["conda-forge", "https://conda.modular.com/max-nightly", "https://repo.prefix.dev/modular-community"]
 name = "mlir"
 platforms = ["linux-64"]
