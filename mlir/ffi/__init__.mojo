@@ -11,9 +11,13 @@ shared libraries and accessing their C API functions. It uses Mojo's built-in
 FFI capabilities to dynamically load libraries and resolve symbols.
 
 The module automatically searches for libraries in the following order:
-1. `vendors/llvm-current/lib/` (project-local installation)
-2. `/usr/lib/llvm-{21,20,19}/lib/` (system APT installation)
-3. System library paths (via `LD_LIBRARY_PATH`)
+1. `vendors/mlir-capi/` (custom-built C API library)
+2. `vendors/llvm-current/lib/` (project-local installation)
+3. `/usr/lib/llvm-{21,20,19}/lib/` (system APT installation)
+4. System library paths (via `LD_LIBRARY_PATH`)
+
+NOTE: The MLIR C API is only distributed as static libraries by LLVM.
+      Use scripts/buildMlirCApi.sh to build the shared library first.
 """
 
 from pathlib import Path
@@ -21,78 +25,35 @@ from sys.ffi import OwnedDLHandle, _Global, _get_dylib_function, _find_dylib
 
 
 # ===----------------------------------------------------------------------=== #
-# Library Path Configuration
+# Library Loading Functions
 # ===----------------------------------------------------------------------=== #
-
-comptime _VENDOR_LIB_PATH = "vendors/llvm-current/lib"
-"""Project-local vendor library path (relative to project root)."""
-
-comptime _SYSTEM_LIB_PATHS = [
-    "/usr/lib/llvm-21/lib",
-    "/usr/lib/llvm-20/lib",
-    "/usr/lib/llvm-19/lib",
-]
-"""System installation paths for LLVM/MLIR (APT packages)."""
-
-comptime _MLIR_C_LIB_NAMES = [
-    "libMLIR-C.so",
-    "libMLIRCAPI.so",
-    "libMLIR.so",
-]
-"""Candidate filenames for the MLIR C API shared library."""
-
-comptime _LLVM_LIB_NAMES = [
-    "libLLVM.so",
-    "libLLVM-21.so",
-    "libLLVM-20.so",
-    "libLLVM-19.so",
-]
-"""Candidate filenames for the LLVM shared library."""
-
-
-# ===----------------------------------------------------------------------=== #
-# Library Loading Infrastructure
-# ===----------------------------------------------------------------------=== #
-
-
-@parameter
-fn _build_library_paths[lib_names: List[StaticString]]() -> List[Path]:
-    """Build a prioritized list of candidate library paths.
-
-    Searches in order: vendor directory, system paths, then bare names.
-    """
-    var paths = List[Path]()
-
-    # 1. Project-local vendor paths (highest priority)
-    @parameter
-    for name in lib_names:
-        paths.append(Path(_VENDOR_LIB_PATH) / name)
-
-    # 2. System installation paths
-    @parameter
-    for sys_path in _SYSTEM_LIB_PATHS:
-
-        @parameter
-        for name in lib_names:
-            paths.append(Path(sys_path) / name)
-
-    # 3. Bare library names (uses LD_LIBRARY_PATH / system linker)
-    @parameter
-    for name in lib_names:
-        paths.append(Path(name))
-
-    return paths^
 
 
 fn _load_mlir_library() -> OwnedDLHandle:
-    """Load the MLIR C API shared library."""
-    comptime paths = _build_library_paths[_MLIR_C_LIB_NAMES]()
+    """Load the MLIR C API shared library.
+
+    Searches for libMLIR-C.so in multiple locations. This library must be
+    built using scripts/buildMlirCApi.sh as LLVM only distributes static libs.
+    """
+    # Priority order for finding the MLIR C API library
+    var paths = List[Path]()
+    paths.append(Path("vendors/mlir-capi/libMLIR-C.so"))
+    paths.append(Path("vendors/llvm-current/lib/libMLIR-C.so"))
+    paths.append(Path("/usr/lib/llvm-21/lib/libMLIR-C.so"))
+    paths.append(Path("/usr/lib/llvm-20/lib/libMLIR-C.so"))
+    paths.append(Path("/usr/lib/llvm-19/lib/libMLIR-C.so"))
+    paths.append(Path("libMLIR-C.so"))
     return _find_dylib["MLIR C API"](paths)
 
 
 fn _load_llvm_library() -> OwnedDLHandle:
     """Load the LLVM shared library."""
-    comptime paths = _build_library_paths[_LLVM_LIB_NAMES]()
+    var paths = List[Path]()
+    paths.append(Path("vendors/llvm-current/lib/libLLVM.so"))
+    paths.append(Path("/usr/lib/llvm-21/lib/libLLVM.so"))
+    paths.append(Path("/usr/lib/llvm-20/lib/libLLVM.so"))
+    paths.append(Path("/usr/lib/llvm-19/lib/libLLVM.so"))
+    paths.append(Path("libLLVM.so"))
     return _find_dylib["LLVM"](paths)
 
 
