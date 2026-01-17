@@ -1,22 +1,25 @@
 # =============================================================================
-# Build Release - Production-Grade LLVM+MLIR Release Builder
+# Build Dev - Production-Grade LLVM+MLIR Developer Build
 # =============================================================================
-# Fully idempotent, fault-tolerant release workflow for runtime FFI packages.
+# Fully idempotent, fault-tolerant developer build workflow.
 #
-# State Machine:
-#   - check-state: Query existing release/assets via GitHub CLI
-#   - build-*: Execute only if asset missing
-#   - publish: Update release only with new assets, never overwrite
+# Produces:
+#   - Full LLVM+MLIR shared libraries
+#   - All command-line tools
+#   - Headers and CMake configuration
+#
+# Publishes to the SAME GitHub Release as runtime packages.
+# Uses strict artifact naming to prevent collision.
 #
 # Guarantees:
 #   ✓ Idempotent - reruns skip completed work
 #   ✓ Partial recovery - rebuild only failed platforms
 #   ✓ No duplicate releases
-#   ✓ No duplicate assets
+#   ✓ No asset collision with release workflow
 #   ✓ Deterministic naming
 # =============================================================================
 
-name: Build Release
+name: Build Dev
 
 on:
   workflow_dispatch:
@@ -33,18 +36,14 @@ on:
         description: 'Release tag (e.g., v21.1.8)'
         required: true
 
-  push:
-    tags:
-      - 'v*'
-
 permissions:
   contents: write
   actions: read
 
-# Tag-stable concurrency group
-# Order flipped to handle push events where inputs are null
+# Tag-stable concurrency group (separate from release)
+# Use ref_name if release_tag input is missing (push events)
 concurrency:
-  group: release-${{ github.ref_name || github.event.inputs.release_tag }}
+  group: dev-${{ github.ref_name || github.event.inputs.release_tag }}
   cancel-in-progress: false
 
 env:
@@ -62,8 +61,8 @@ jobs:
       llvm_version: ${{ steps.vars.outputs.llvm_version }}
       llvm_tag: ${{ steps.vars.outputs.llvm_tag }}
       release_exists: ${{ steps.check.outputs.release_exists }}
-      linux_asset_exists: ${{ steps.check.outputs.linux_asset_exists }}
-      macos_asset_exists: ${{ steps.check.outputs.macos_asset_exists }}
+      linux_dev_asset_exists: ${{ steps.check.outputs.linux_dev_asset_exists }}
+      macos_dev_asset_exists: ${{ steps.check.outputs.macos_dev_asset_exists }}
       skip_linux: ${{ steps.check.outputs.skip_linux }}
       skip_macos: ${{ steps.check.outputs.skip_macos }}
       all_complete: ${{ steps.check.outputs.all_complete }}
@@ -104,7 +103,7 @@ jobs:
           echo "LLVM Version: ${LLVM_VERSION}"
           echo "LLVM Tag: ${LLVM_TAG}"
 
-      - name: Check Release & Assets via gh CLI
+      - name: Check Release & Dev Assets via gh CLI
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,55 +112,55 @@ jobs:
           
           TAG="${{ steps.vars.outputs.release_tag }}"
           
-          LINUX_ASSET="llvm+mlir-${TAG}-linux-x86_64.tar.gz"
-          MACOS_ASSET="llvm+mlir-${TAG}-macos-arm64.tar.gz"
+          # Dev asset names (note the -dev- infix)
+          LINUX_DEV_ASSET="llvm+mlir-${TAG}-dev-linux-x86_64.tar.gz"
+          MACOS_DEV_ASSET="llvm+mlir-${TAG}-dev-macos-arm64.tar.gz"
           
           echo "Checking release: $TAG"
           
-          # Use gh release view for rate-limit safety & authn
+          # Use gh release view for rate-limit safety
           if gh release view "$TAG" --json assets > release.json; then
             echo "release_exists=true" >> "$GITHUB_OUTPUT"
             echo "✅ Release $TAG exists"
             
-            # Use jq for robust exact matching (avoids grepping "(1)" issues)
+            # Robust jq check
             has_asset() {
               jq -e --arg name "$1" '.assets[] | select(.name == $name) | .name' release.json >/dev/null
             }
             
-            # Check Linux asset
-            if has_asset "$LINUX_ASSET"; then
-              echo "linux_asset_exists=true" >> "$GITHUB_OUTPUT"
+            # Check Linux dev asset
+            if has_asset "$LINUX_DEV_ASSET"; then
+              echo "linux_dev_asset_exists=true" >> "$GITHUB_OUTPUT"
               echo "skip_linux=true" >> "$GITHUB_OUTPUT"
-              echo "  ✅ Linux asset exists"
+              echo "  ✅ Linux dev asset exists"
             else
-              echo "linux_asset_exists=false" >> "$GITHUB_OUTPUT"
+              echo "linux_dev_asset_exists=false" >> "$GITHUB_OUTPUT"
               echo "skip_linux=false" >> "$GITHUB_OUTPUT"
-              echo "  ❌ Linux asset missing"
+              echo "  ❌ Linux dev asset missing"
             fi
             
-            # Check macOS asset
-            if has_asset "$MACOS_ASSET"; then
-              echo "macos_asset_exists=true" >> "$GITHUB_OUTPUT"
+            # Check macOS dev asset
+            if has_asset "$MACOS_DEV_ASSET"; then
+              echo "macos_dev_asset_exists=true" >> "$GITHUB_OUTPUT"
               echo "skip_macos=true" >> "$GITHUB_OUTPUT"
-              echo "  ✅ macOS asset exists"
+              echo "  ✅ macOS dev asset exists"
             else
-              echo "macos_asset_exists=false" >> "$GITHUB_OUTPUT"
+              echo "macos_dev_asset_exists=false" >> "$GITHUB_OUTPUT"
               echo "skip_macos=false" >> "$GITHUB_OUTPUT"
-              echo "  ❌ macOS asset missing"
+              echo "  ❌ macOS dev asset missing"
             fi
             
-            # Check if all complete
-            if has_asset "$LINUX_ASSET" && has_asset "$MACOS_ASSET"; then
+            # Check if all dev assets complete
+            if has_asset "$LINUX_DEV_ASSET" && has_asset "$MACOS_DEV_ASSET"; then
               echo "all_complete=true" >> "$GITHUB_OUTPUT"
-              echo "✅ All release assets already exist"
+              echo "✅ All dev assets already exist"
             else
               echo "all_complete=false" >> "$GITHUB_OUTPUT"
             fi
-            
           else
             echo "release_exists=false" >> "$GITHUB_OUTPUT"
-            echo "linux_asset_exists=false" >> "$GITHUB_OUTPUT"
-            echo "macos_asset_exists=false" >> "$GITHUB_OUTPUT"
+            echo "linux_dev_asset_exists=false" >> "$GITHUB_OUTPUT"
+            echo "macos_dev_asset_exists=false" >> "$GITHUB_OUTPUT"
             echo "skip_linux=false" >> "$GITHUB_OUTPUT"
             echo "skip_macos=false" >> "$GITHUB_OUTPUT"
             echo "all_complete=false" >> "$GITHUB_OUTPUT"
@@ -169,14 +168,14 @@ jobs:
           fi
 
   # ===========================================================================
-  # Job 2: Linux x86_64 Build
+  # Job 2: Linux x86_64 Dev Build
   # ===========================================================================
   build-linux-x64:
-    name: Linux x86_64
+    name: Linux x86_64 Dev
     needs: check-state
     if: needs.check-state.outputs.skip_linux != 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     
     outputs:
       status: ${{ steps.result.outputs.status }}
@@ -195,20 +194,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-release-linux-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-release.sh') }}
+          key: ccache-dev-linux-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-dev.sh') }}
           restore-keys: |
-            ccache-release-linux-${{ needs.check-state.outputs.llvm_tag }}-
+            ccache-dev-linux-${{ needs.check-state.outputs.llvm_tag }}-
 
       - name: Cache Build Directory
         uses: actions/cache@v4
         with:
-          path: build-llvm-mlir-linux-x64
-          # Strict cache key: script hash prevents reusing old build dir with different flags
-          key: build-release-linux-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-release.sh') }}
+          path: build-llvm-mlir-dev-linux-x64
+          # Strict key: dev-linux prefix, script hash required
+          key: build-dev-linux-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-dev.sh') }}
 
       - name: Configure ccache
         run: |
-          ccache --set-config=max_size=2G
+          ccache --set-config=max_size=4G
           ccache --set-config=compression=true
           ccache -z
           echo "CC=ccache gcc" >> "$GITHUB_ENV"
@@ -219,7 +218,7 @@ jobs:
           LLVM_TAG="${{ needs.check-state.outputs.llvm_tag }}"
           if [[ -d "llvm-project" ]]; then
             cd llvm-project
-            # Fetch tags to ensure git describe works on shallow clones
+            # Safe shallow clone fetch
             git fetch --tags --depth=1 origin "$LLVM_TAG" || true
             CURRENT=$(git describe --tags --exact-match 2>/dev/null || echo "unknown")
             cd ..
@@ -236,10 +235,10 @@ jobs:
       - name: Build
         id: build
         run: |
-          chmod +x scripts/build-release.sh
+          chmod +x scripts/build-dev.sh
           export LLVM_VERSION="${{ needs.check-state.outputs.llvm_version }}"
           export JOBS=$(nproc)
-          ./scripts/build-release.sh
+          ./scripts/build-dev.sh
 
       - name: Package
         id: package
@@ -247,19 +246,21 @@ jobs:
           set -euo pipefail
           TAG="${{ needs.check-state.outputs.release_tag }}"
           
-          INSTALL_DIR=$(find . -maxdepth 1 -type d -name "llvm-mlir-*-linux-x64" | head -1)
+          INSTALL_DIR=$(find . -maxdepth 1 -type d -name "llvm-mlir-dev-*-linux-x64" | head -1)
           if [[ -z "$INSTALL_DIR" ]]; then
             echo "::error::Build output directory not found"
             exit 1
           fi
           
-          if ! nm -D "${INSTALL_DIR}/lib/libLLVM.so" 2>/dev/null | grep -q "LLVMContextCreate"; then
-            echo "::error::LLVM C API symbol verification failed"
+          # Verify mlir-opt exists
+          if [[ ! -x "${INSTALL_DIR}/bin/mlir-opt" ]]; then
+            echo "::error::mlir-opt not found or not executable"
             exit 1
           fi
-          echo "✅ LLVM C API verified"
+          echo "✅ mlir-opt verified"
           
-          PKG_NAME="llvm+mlir-${TAG}-linux-x86_64.tar.gz"
+          # Create package with strict dev naming
+          PKG_NAME="llvm+mlir-${TAG}-dev-linux-x86_64.tar.gz"
           tar -czf "$PKG_NAME" "$INSTALL_DIR"
           
           echo "Package: $PKG_NAME ($(du -h "$PKG_NAME" | cut -f1))"
@@ -268,7 +269,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-linux-x64
+          name: dev-linux-x64
           path: ${{ steps.package.outputs.artifact_name }}
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
           if-no-files-found: error
@@ -288,14 +289,14 @@ jobs:
           fi
 
   # ===========================================================================
-  # Job 3: macOS ARM64 Build
+  # Job 3: macOS ARM64 Dev Build
   # ===========================================================================
   build-macos-arm64:
-    name: macOS ARM64
+    name: macOS ARM64 Dev
     needs: check-state
     if: needs.check-state.outputs.skip_macos != 'true'
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 240
     
     outputs:
       status: ${{ steps.result.outputs.status }}
@@ -315,20 +316,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/ccache
-          key: ccache-release-macos-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-release.sh') }}
+          key: ccache-dev-macos-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-dev.sh') }}
           restore-keys: |
-            ccache-release-macos-${{ needs.check-state.outputs.llvm_tag }}-
+            ccache-dev-macos-${{ needs.check-state.outputs.llvm_tag }}-
 
       - name: Cache Build Directory
         uses: actions/cache@v4
         with:
-          path: build-llvm-mlir-macos-arm64
-          # Strict cache key: script hash prevents reusing old build dir with different flags
-          key: build-release-macos-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-release.sh') }}
+          path: build-llvm-mlir-dev-macos-arm64
+          # Strict key: dev-macos prefix, script hash required
+          key: build-dev-macos-${{ needs.check-state.outputs.llvm_tag }}-${{ hashFiles('scripts/build-dev.sh') }}
 
       - name: Configure ccache
         run: |
-          ccache --set-config=max_size=2G
+          ccache --set-config=max_size=4G
           ccache --set-config=compression=true
           ccache -z
           echo "CC=ccache clang" >> "$GITHUB_ENV"
@@ -339,7 +340,6 @@ jobs:
           LLVM_TAG="${{ needs.check-state.outputs.llvm_tag }}"
           if [[ -d "llvm-project" ]]; then
             cd llvm-project
-            # Fetch tags for proper git describe
             git fetch --tags --depth=1 origin "$LLVM_TAG" || true
             CURRENT=$(git describe --tags --exact-match 2>/dev/null || echo "unknown")
             cd ..
@@ -356,10 +356,10 @@ jobs:
       - name: Build
         id: build
         run: |
-          chmod +x scripts/build-release.sh
+          chmod +x scripts/build-dev.sh
           export LLVM_VERSION="${{ needs.check-state.outputs.llvm_version }}"
           export JOBS=$(sysctl -n hw.ncpu)
-          ./scripts/build-release.sh
+          ./scripts/build-dev.sh
 
       - name: Package
         id: package
@@ -367,21 +367,19 @@ jobs:
           set -euo pipefail
           TAG="${{ needs.check-state.outputs.release_tag }}"
           
-          INSTALL_DIR=$(find . -maxdepth 1 -type d -name "llvm-mlir-*-macos-arm64" | head -1)
+          INSTALL_DIR=$(find . -maxdepth 1 -type d -name "llvm-mlir-dev-*-macos-arm64" | head -1)
           if [[ -z "$INSTALL_DIR" ]]; then
             echo "::error::Build output directory not found"
             exit 1
           fi
           
-          # Verify library exists
-          if [[ ! -f "${INSTALL_DIR}/lib/libLLVM.dylib" ]]; then
-            echo "::warning::libLLVM.dylib not at expected path"
-            find "${INSTALL_DIR}/lib" -name "libLLVM*" -type f | head -5
-          else
-            echo "✅ libLLVM.dylib found"
+          if [[ ! -x "${INSTALL_DIR}/bin/mlir-opt" ]]; then
+            echo "::error::mlir-opt not found or not executable"
+            exit 1
           fi
+          echo "✅ mlir-opt verified"
           
-          PKG_NAME="llvm+mlir-${TAG}-macos-arm64.tar.gz"
+          PKG_NAME="llvm+mlir-${TAG}-dev-macos-arm64.tar.gz"
           tar -czf "$PKG_NAME" "$INSTALL_DIR"
           
           echo "Package: $PKG_NAME ($(du -h "$PKG_NAME" | cut -f1))"
@@ -390,7 +388,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-macos-arm64
+          name: dev-macos-arm64
           path: ${{ steps.package.outputs.artifact_name }}
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
           if-no-files-found: error
@@ -410,10 +408,10 @@ jobs:
           fi
 
   # ===========================================================================
-  # Job 4: Publish Release
+  # Job 4: Publish Dev Assets
   # ===========================================================================
   publish-release:
-    name: Publish Release
+    name: Publish Dev Assets
     needs: [check-state, build-linux-x64, build-macos-arm64]
     if: always()
     runs-on: ubuntu-latest
@@ -458,8 +456,8 @@ jobs:
             MACOS_FINAL="failure"
           fi
           
-          echo "Linux final state: $LINUX_FINAL"
-          echo "macOS final state: $MACOS_FINAL"
+          echo "Linux dev final state: $LINUX_FINAL"
+          echo "macOS dev final state: $MACOS_FINAL"
           
           NEW_ARTIFACTS=0
           [[ "$LINUX_FINAL" == "success" ]] && ((NEW_ARTIFACTS++)) || true
@@ -470,10 +468,10 @@ jobs:
           [[ "$MACOS_FINAL" == "success" || "$MACOS_FINAL" == "skipped" ]] && ((SUCCESS_COUNT++)) || true
           
           if [[ $SUCCESS_COUNT -eq 0 ]]; then
-            echo "::error::All builds failed. No release will be created/updated."
+            echo "::error::All dev builds failed. No release update."
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
           elif [[ $NEW_ARTIFACTS -eq 0 ]]; then
-            echo "All release assets already exist. Nothing to publish."
+            echo "All dev assets already exist. Nothing to publish."
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
@@ -482,12 +480,12 @@ jobs:
           echo "linux_final=$LINUX_FINAL" >> "$GITHUB_OUTPUT"
           echo "macos_final=$MACOS_FINAL" >> "$GITHUB_OUTPUT"
 
-      - name: Download Release Artifacts Only
+      - name: Download Dev Artifacts Only
         if: steps.evaluate.outputs.should_publish == 'true'
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: release-*
+          pattern: dev-*
 
       - name: Prepare Assets (Overwrite Protection)
         if: steps.evaluate.outputs.should_publish == 'true'
@@ -500,29 +498,14 @@ jobs:
           
           TAG="${{ needs.check-state.outputs.release_tag }}"
           
-          find artifacts -type f -name "llvm+mlir-${TAG}-linux-x86_64.tar.gz" -exec cp {} release-assets/ \; 2>/dev/null || true
-          find artifacts -type f -name "llvm+mlir-${TAG}-macos-arm64.tar.gz" -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -type f -name "llvm+mlir-${TAG}-dev-linux-x86_64.tar.gz" -exec cp {} release-assets/ \; 2>/dev/null || true
+          find artifacts -type f -name "llvm+mlir-${TAG}-dev-macos-arm64.tar.gz" -exec cp {} release-assets/ \; 2>/dev/null || true
           
-          # Delete-protection: Do not upload assets that already exist
-          # (unless we just built them, implying we want to replace, but softprops v2 appends logic is complex)
-          # With softprops/action-gh-release@v2, existing files are overwritten.
-          # We only downloaded NEW artifacts (since skipped ones are not artifacts).
-          # So we are only uploading what we freshly built.
-          # If we freshly built it, we implicitly want to overwrite any stale/broken asset.
-          # But to strictly follow "Never overwrite", we would need to check again.
-          # However, logical correctness: If check-state said "missing", we built it.
-          # So it shouldn't exist. If it appeared in between, it's a race, but our concurrency group prevents that.
+          # We only upload newly built dev assets, maintaining namespace separation from release workflow.
+          # Overwrite protection relies on check-state skipping builds if assets exist.
           
-          echo "Release assets to upload:"
+          echo "Dev assets to upload:"
           ls -lh release-assets/ || echo "(none)"
-          
-          LINUX_EMOJI="❌"
-          MACOS_EMOJI="❌"
-          [[ "${{ steps.evaluate.outputs.linux_final }}" == "success" || "${{ steps.evaluate.outputs.linux_final }}" == "skipped" ]] && LINUX_EMOJI="✅"
-          [[ "${{ steps.evaluate.outputs.macos_final }}" == "success" || "${{ steps.evaluate.outputs.macos_final }}" == "skipped" ]] && MACOS_EMOJI="✅"
-          
-          echo "linux_emoji=$LINUX_EMOJI" >> "$GITHUB_OUTPUT"
-          echo "macos_emoji=$MACOS_EMOJI" >> "$GITHUB_OUTPUT"
 
       - name: Publish to GitHub Releases
         if: steps.evaluate.outputs.should_publish == 'true'
@@ -530,29 +513,7 @@ jobs:
         with:
           tag_name: ${{ needs.check-state.outputs.release_tag }}
           name: LLVM ${{ needs.check-state.outputs.llvm_version }} + MLIR C API
-          body: |
-            # LLVM ${{ needs.check-state.outputs.llvm_version }} + MLIR C API
-            
-            Prebuilt LLVM and MLIR binaries with the C API enabled for FFI and language bindings.
-            
-            ## Runtime Packages (FFI)
-            
-            | Platform | Status | Artifact |
-            |----------|--------|----------|
-            | Linux x86_64 | ${{ steps.prepare.outputs.linux_emoji }} | `llvm+mlir-${{ needs.check-state.outputs.release_tag }}-linux-x86_64.tar.gz` |
-            | macOS ARM64 | ${{ steps.prepare.outputs.macos_emoji }} | `llvm+mlir-${{ needs.check-state.outputs.release_tag }}-macos-arm64.tar.gz` |
-            
-            ## Build Configuration
-            
-            - **LLVM Tag:** `${{ needs.check-state.outputs.llvm_tag }}`
-            - **Targets:** X86, AArch64, RISCV, NVPTX, AMDGPU, SPIRV
-            - **APIs:** LLVM C API, MLIR C API
-            
-            ---
-            *Automated release by GitHub Actions*
           files: release-assets/*
-          draft: false
-          prerelease: false
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
