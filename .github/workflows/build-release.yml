@@ -2,29 +2,29 @@
 # LLVM + MLIR Multi-Platform Release Builder
 # =============================================================================
 #
-# This workflow automates the build and release of LLVM and MLIR C API
-# binaries across multiple platforms. It produces both minimal (runtime-only)
-# and full (with headers and tools) packages for downstream consumers.
+# Production-grade CI/CD pipeline for building and releasing LLVM and MLIR
+# C API binaries. Designed for resilience: partial failures do not block
+# the entire release process.
 #
 # Supported Platforms:
 #   - Linux x86_64     (Ubuntu 22.04)
 #   - macOS ARM64      (macOS 15 Apple Silicon)
 #
-# Note: Linux ARM64 (QEMU) and macOS Intel removed due to slow build times.
+# Key Features:
+#   - Graceful degradation: releases proceed with available artifacts
+#   - Comprehensive error handling and validation
+#   - Concurrency control to prevent duplicate runs
+#   - Timeouts to prevent hung builds from blocking resources
 #
 # Usage:
-#   1. Manual trigger via Actions > Run workflow
-#   2. Automatic trigger on version tags (e.g., v21.1.8)
+#   1. Manual: Actions > Run workflow
+#   2. Automatic: Push a version tag (e.g., v21.1.8)
 #
 # =============================================================================
 
 name: LLVM+MLIR Release
 
 on:
-  # ---------------------------------------------------------------------------
-  # Manual Trigger
-  # Allows you to build whenever needed with full control over versions.
-  # ---------------------------------------------------------------------------
   workflow_dispatch:
     inputs:
       llvm_version:
@@ -39,13 +39,17 @@ on:
         description: 'Release tag (e.g., v21.1.8)'
         required: true
 
-  # ---------------------------------------------------------------------------
-  # Automatic Trigger
-  # Fires when you push a version tag matching the pattern v*.
-  # ---------------------------------------------------------------------------
   push:
     tags:
       - 'v*'
+
+# =============================================================================
+# CONCURRENCY CONTROL
+# Prevents duplicate workflow runs for the same release tag.
+# =============================================================================
+concurrency:
+  group: release-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 # =============================================================================
 # ENVIRONMENT DEFAULTS
@@ -65,7 +69,11 @@ jobs:
   build-linux-x64:
     name: Linux x86_64
     runs-on: ubuntu-22.04
-    continue-on-error: true  # Don't block other jobs if this fails
+    timeout-minutes: 180
+    continue-on-error: true
+
+    outputs:
+      result: ${{ steps.set-result.outputs.status }}
 
     steps:
       - name: Checkout repository
@@ -73,59 +81,89 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          set -euo pipefail
           echo "Installing required packages..."
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build python3 zlib1g-dev g++
           echo "Dependencies installed successfully"
 
       - name: Clone LLVM source
+        id: clone
         run: |
-          echo "Cloning LLVM from branch: ${{ github.event.inputs.llvm_branch || 'release/21.x' }}"
-          git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
-            https://github.com/llvm/llvm-project.git
-          echo "LLVM source cloned"
+          set -euo pipefail
+          BRANCH="${{ github.event.inputs.llvm_branch || 'release/21.x' }}"
+          echo "Cloning LLVM from branch: ${BRANCH}"
+          
+          if ! git clone --depth=1 --branch="${BRANCH}" https://github.com/llvm/llvm-project.git; then
+            echo "::error::Failed to clone LLVM repository"
+            exit 1
+          fi
+          echo "LLVM source cloned successfully"
 
       - name: Build LLVM and MLIR
+        id: build
         run: |
+          set -euo pipefail
           chmod +x build.sh
           echo "Starting build with ${{ env.DEFAULT_JOBS }} parallel jobs..."
-          ./build.sh
+          
+          if ! ./build.sh; then
+            echo "::error::LLVM build failed"
+            exit 1
+          fi
+          echo "Build completed successfully"
         env:
           LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
           JOBS: 4
 
       - name: Verify C API symbols
+        id: verify
         run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-x64)
+          set -euo pipefail
+          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-x64 2>/dev/null | head -1)
+          
+          if [[ -z "${INSTALL_DIR}" ]]; then
+            echo "::error::Build output directory not found"
+            exit 1
+          fi
+          
           echo "Verifying build outputs in: ${INSTALL_DIR}"
           
           echo "Checking LLVM C API..."
-          nm -D ${INSTALL_DIR}/lib/libLLVM.so* | grep -q "LLVMContextCreate" || exit 1
+          if ! nm -D "${INSTALL_DIR}/lib/libLLVM.so"* 2>/dev/null | grep -q "LLVMContextCreate"; then
+            echo "::error::LLVM C API symbols not found"
+            exit 1
+          fi
           echo "LLVM C API verified"
           
           echo "Checking MLIR C API..."
-          nm -D ${INSTALL_DIR}/lib/libMLIR-C.so* | grep -q "mlirContextCreate" || exit 1
+          if ! nm -D "${INSTALL_DIR}/lib/libMLIR-C.so"* 2>/dev/null | grep -q "mlirContextCreate"; then
+            echo "::error::MLIR C API symbols not found"
+            exit 1
+          fi
           echo "MLIR C API verified"
 
       - name: Create distribution packages
+        id: package
         run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-x64)
-          VERSION=${{ github.event.inputs.llvm_version || '21' }}
+          set -euo pipefail
+          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-x64 | head -1)
+          VERSION="${{ github.event.inputs.llvm_version || '21' }}"
           
           echo "Creating distribution packages..."
           
-          # Minimal package: runtime libraries only (ideal for FFI consumers)
+          # Minimal package: runtime libraries only
           echo "Building minimal package (runtime libraries only)..."
-          mkdir -p ${INSTALL_DIR}-minimal/lib
-          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/
-          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
-          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
-          sha256sum ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
+          mkdir -p "${INSTALL_DIR}-minimal/lib"
+          cp -r "${INSTALL_DIR}/lib/"*.so* "${INSTALL_DIR}-minimal/lib/"
+          echo "LLVM ${VERSION}" > "${INSTALL_DIR}-minimal/lib/version.txt"
+          tar -czf "${INSTALL_DIR}-minimal.tar.gz" "${INSTALL_DIR}-minimal"
+          sha256sum "${INSTALL_DIR}-minimal.tar.gz" > "${INSTALL_DIR}-minimal.tar.gz.sha256"
           
           # Full package: includes headers and development tools
           echo "Building full package (with headers and tools)..."
-          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
-          sha256sum ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
+          tar -czf "${INSTALL_DIR}-full.tar.gz" "${INSTALL_DIR}"
+          sha256sum "${INSTALL_DIR}-full.tar.gz" > "${INSTALL_DIR}-full.tar.gz.sha256"
           
           echo "Packages created:"
           ls -lh *.tar.gz
@@ -138,6 +176,17 @@ jobs:
             llvm-mlir-*-linux-x64-minimal.tar.gz*
             llvm-mlir-*-linux-x64-full.tar.gz*
           retention-days: 7
+          if-no-files-found: error
+
+      - name: Set job result
+        id: set-result
+        if: always()
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
 
   # ---------------------------------------------------------------------------
   # macOS ARM64 (Apple Silicon) Build
@@ -145,7 +194,11 @@ jobs:
   build-macos-arm64:
     name: macOS Apple Silicon (ARM64)
     runs-on: macos-15
-    continue-on-error: true  # Don't block other jobs if this fails
+    timeout-minutes: 180
+    continue-on-error: true
+
+    outputs:
+      result: ${{ steps.set-result.outputs.status }}
 
     steps:
       - name: Checkout repository
@@ -153,57 +206,82 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          set -euo pipefail
           echo "Installing Homebrew packages..."
           brew install cmake ninja || true
-          # Python 3 is pre-installed on GitHub runners; skip to avoid link conflicts
           echo "Dependencies installed"
 
       - name: Clone LLVM source
+        id: clone
         run: |
-          echo "Cloning LLVM from branch: ${{ github.event.inputs.llvm_branch || 'release/21.x' }}"
-          git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
-            https://github.com/llvm/llvm-project.git
-          echo "LLVM source cloned"
+          set -euo pipefail
+          BRANCH="${{ github.event.inputs.llvm_branch || 'release/21.x' }}"
+          echo "Cloning LLVM from branch: ${BRANCH}"
+          
+          if ! git clone --depth=1 --branch="${BRANCH}" https://github.com/llvm/llvm-project.git; then
+            echo "::error::Failed to clone LLVM repository"
+            exit 1
+          fi
+          echo "LLVM source cloned successfully"
 
       - name: Build LLVM and MLIR
+        id: build
         run: |
+          set -euo pipefail
           chmod +x build.sh
           echo "Starting build with ${{ env.DEFAULT_JOBS }} parallel jobs..."
-          ./build.sh
+          
+          if ! ./build.sh; then
+            echo "::error::LLVM build failed"
+            exit 1
+          fi
+          echo "Build completed successfully"
         env:
           LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
           JOBS: 4
 
       - name: Verify C API symbols
+        id: verify
         run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-arm64)
+          set -euo pipefail
+          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-arm64 2>/dev/null | head -1)
+          
+          if [[ -z "${INSTALL_DIR}" ]]; then
+            echo "::error::Build output directory not found"
+            exit 1
+          fi
+          
           echo "Verifying build outputs in: ${INSTALL_DIR}"
           
           echo "Checking LLVM C API..."
-          nm -D ${INSTALL_DIR}/lib/libLLVM.dylib 2>/dev/null | grep -q "LLVMContextCreate" || \
-          nm ${INSTALL_DIR}/lib/libLLVM.dylib | grep -q "LLVMContextCreate" || exit 1
+          if ! nm "${INSTALL_DIR}/lib/libLLVM.dylib" 2>/dev/null | grep -q "LLVMContextCreate"; then
+            echo "::error::LLVM C API symbols not found"
+            exit 1
+          fi
           echo "LLVM C API verified"
 
       - name: Create distribution packages
+        id: package
         run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-arm64)
-          VERSION=${{ github.event.inputs.llvm_version || '21' }}
+          set -euo pipefail
+          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-arm64 | head -1)
+          VERSION="${{ github.event.inputs.llvm_version || '21' }}"
           
           echo "Creating distribution packages..."
           
           # Minimal package
           echo "Building minimal package..."
-          mkdir -p ${INSTALL_DIR}-minimal/lib
-          cp -r ${INSTALL_DIR}/lib/*.dylib ${INSTALL_DIR}-minimal/lib/ || true
-          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/ || true
-          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
-          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
-          shasum -a 256 ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
+          mkdir -p "${INSTALL_DIR}-minimal/lib"
+          cp -r "${INSTALL_DIR}/lib/"*.dylib "${INSTALL_DIR}-minimal/lib/" 2>/dev/null || true
+          cp -r "${INSTALL_DIR}/lib/"*.so* "${INSTALL_DIR}-minimal/lib/" 2>/dev/null || true
+          echo "LLVM ${VERSION}" > "${INSTALL_DIR}-minimal/lib/version.txt"
+          tar -czf "${INSTALL_DIR}-minimal.tar.gz" "${INSTALL_DIR}-minimal"
+          shasum -a 256 "${INSTALL_DIR}-minimal.tar.gz" > "${INSTALL_DIR}-minimal.tar.gz.sha256"
           
           # Full package
           echo "Building full package..."
-          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
-          shasum -a 256 ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
+          tar -czf "${INSTALL_DIR}-full.tar.gz" "${INSTALL_DIR}"
+          shasum -a 256 "${INSTALL_DIR}-full.tar.gz" > "${INSTALL_DIR}-full.tar.gz.sha256"
           
           echo "Packages created:"
           ls -lh *.tar.gz
@@ -216,65 +294,108 @@ jobs:
             llvm-mlir-*-macos-arm64-minimal.tar.gz*
             llvm-mlir-*-macos-arm64-full.tar.gz*
           retention-days: 7
+          if-no-files-found: error
+
+      - name: Set job result
+        id: set-result
+        if: always()
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
 
   # ---------------------------------------------------------------------------
   # Create GitHub Release
-  # Aggregates all platform artifacts and publishes a versioned release.
+  # Aggregates available artifacts and publishes a versioned release.
+  # Proceeds with partial artifacts if some builds failed.
   # ---------------------------------------------------------------------------
   create-release:
     name: Create Release
     needs: [build-linux-x64, build-macos-arm64]
     runs-on: ubuntu-latest
-    if: always()  # Run even if some builds failed
+    timeout-minutes: 15
+    if: always()
 
     steps:
-      - name: Check if any builds succeeded
-        id: check-builds
+      - name: Evaluate build results
+        id: evaluate
         run: |
-          # At least one build must have succeeded to create a release
-          if [[ "${{ needs.build-linux-x64.result }}" == "success" ]] || \
-             [[ "${{ needs.build-macos-arm64.result }}" == "success" ]]; then
-            echo "has_artifacts=true" >> $GITHUB_OUTPUT
-            echo "At least one build succeeded, proceeding with release"
-          else
-            echo "has_artifacts=false" >> $GITHUB_OUTPUT
-            echo "All builds failed, skipping release"
+          set -euo pipefail
+          
+          LINUX_RESULT="${{ needs.build-linux-x64.result }}"
+          MACOS_RESULT="${{ needs.build-macos-arm64.result }}"
+          
+          echo "=== Build Results ==="
+          echo "Linux x86_64:         ${LINUX_RESULT}"
+          echo "macOS Apple Silicon:  ${MACOS_RESULT}"
+          echo ""
+          
+          # Determine if we should proceed
+          SUCCESS_COUNT=0
+          [[ "${LINUX_RESULT}" == "success" ]] && ((SUCCESS_COUNT++)) || true
+          [[ "${MACOS_RESULT}" == "success" ]] && ((SUCCESS_COUNT++)) || true
+          
+          echo "Successful builds: ${SUCCESS_COUNT}/2"
+          
+          if [[ ${SUCCESS_COUNT} -eq 0 ]]; then
+            echo "::error::All builds failed. Cannot create release."
+            echo "should_release=false" >> $GITHUB_OUTPUT
             exit 1
           fi
+          
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "success_count=${SUCCESS_COUNT}" >> $GITHUB_OUTPUT
+          
+          # Set warning if partial
+          if [[ ${SUCCESS_COUNT} -lt 2 ]]; then
+            echo "::warning::Creating partial release. Some platforms failed."
+          fi
 
-      - name: Download all platform artifacts
+      - name: Download available artifacts
+        if: steps.evaluate.outputs.should_release == 'true'
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-        continue-on-error: true  # Some artifacts may not exist
+        continue-on-error: true
 
       - name: Prepare release assets
+        if: steps.evaluate.outputs.should_release == 'true'
+        id: prepare
         run: |
-          echo "Collecting release assets from all platforms..."
+          set -euo pipefail
+          
+          echo "Collecting release assets..."
           mkdir -p release-assets
           
-          # Copy whatever artifacts exist
+          # Copy available artifacts
           find artifacts -name "*.tar.gz*" -exec cp {} release-assets/ \; 2>/dev/null || true
           
-          # Check what we have
-          ASSET_COUNT=$(ls -1 release-assets/*.tar.gz 2>/dev/null | wc -l || echo 0)
-          echo "Found ${ASSET_COUNT} packages"
+          # Validate we have something to release
+          PACKAGE_COUNT=$(find release-assets -name "*.tar.gz" 2>/dev/null | wc -l || echo 0)
+          echo "Found ${PACKAGE_COUNT} packages"
           
-          if [ "$ASSET_COUNT" -eq 0 ]; then
-            echo "ERROR: No artifacts found!"
+          if [[ "${PACKAGE_COUNT}" -eq 0 ]]; then
+            echo "::error::No packages found for release"
             exit 1
           fi
           
-          echo "Release assets ready:"
+          echo "Release assets:"
           ls -lh release-assets/
           
-          # Report which platforms succeeded
-          echo ""
-          echo "=== Build Status ==="
-          echo "Linux x86_64: ${{ needs.build-linux-x64.result }}"
-          echo "macOS ARM64:  ${{ needs.build-macos-arm64.result }}"
+          # Generate availability notes for release body
+          LINUX_STATUS="Not available"
+          MACOS_STATUS="Not available"
+          
+          [[ "${{ needs.build-linux-x64.result }}" == "success" ]] && LINUX_STATUS="Available"
+          [[ "${{ needs.build-macos-arm64.result }}" == "success" ]] && MACOS_STATUS="Available"
+          
+          echo "linux_status=${LINUX_STATUS}" >> $GITHUB_OUTPUT
+          echo "macos_status=${MACOS_STATUS}" >> $GITHUB_OUTPUT
 
       - name: Publish GitHub release
+        if: steps.evaluate.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
@@ -282,61 +403,79 @@ jobs:
           body: |
             # LLVM ${{ github.event.inputs.llvm_version || '21' }} + MLIR C API
             
-            Production-ready LLVM and MLIR libraries built with full C API support for FFI usage.
+            Production-ready LLVM and MLIR libraries with full C API support for FFI usage.
             
             ---
             
-            ## Available Packages
+            ## Package Availability
             
-            | Platform | Minimal (Runtime Only) | Full (Headers + Tools) |
-            |----------|------------------------|------------------------|
-            | Linux x86_64 | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-full.tar.gz` |
-            | macOS Apple Silicon | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-full.tar.gz` |
+            | Platform | Status | Minimal | Full |
+            |----------|--------|---------|------|
+            | Linux x86_64 | ${{ steps.prepare.outputs.linux_status }} | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-full.tar.gz` |
+            | macOS Apple Silicon | ${{ steps.prepare.outputs.macos_status }} | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-full.tar.gz` |
             
-            **Note:** Use the Minimal package (~50-80 MB) for runtime FFI. Use Full (~180-220 MB) for development.
-            
-            > Linux ARM64 and macOS Intel builds are available on request (slower build times).
+            **Package Sizes:** Minimal (~50-80 MB) for runtime FFI | Full (~180-220 MB) for development
             
             ---
             
-            ## Verification
+            ## Quick Start
             
             ```bash
-            # Extract the package
+            # Extract
             tar -xzf llvm-mlir-*-minimal.tar.gz
             
-            # Verify C API symbols (Linux)
+            # Verify (Linux)
             nm -D llvm-mlir-*/lib/libLLVM.so* | grep LLVMContextCreate
             
-            # Verify C API symbols (macOS)
+            # Verify (macOS)
             nm llvm-mlir-*/lib/libLLVM.dylib | grep LLVMContextCreate
             ```
             
             ---
             
-            ## Build Configuration
+            ## Build Details
             
             | Property | Value |
             |----------|-------|
             | LLVM Branch | `${{ github.event.inputs.llvm_branch || 'release/21.x' }}` |
             | Targets | X86, AArch64, RISCV, NVPTX, AMDGPU, SPIRV |
             | Execution Engine | Enabled |
-            | PDL (Pattern Description Language) | Enabled |
-            | IRDL (IR Definition Language) | Enabled |
+            | PDL | Enabled |
+            | IRDL | Enabled |
             | Transform Dialect | Enabled |
             
             ---
             
-            ## Integrity Verification
-            
-            Each package includes a corresponding `.sha256` file:
+            ## Integrity Check
             
             ```bash
-            sha256sum -c <package-name>.tar.gz.sha256
+            # Linux
+            sha256sum -c <package>.tar.gz.sha256
+            
+            # macOS
+            shasum -a 256 -c <package>.tar.gz.sha256
             ```
             
           files: release-assets/*
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux x86_64 | ${{ needs.build-linux-x64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS ARM64 | ${{ needs.build-macos-arm64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.evaluate.outputs.should_release }}" == "true" ]]; then
+            echo "Release created with ${{ steps.evaluate.outputs.success_count }}/2 platforms." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Release was not created due to build failures." >> $GITHUB_STEP_SUMMARY
+          fi
