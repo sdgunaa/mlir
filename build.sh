@@ -108,7 +108,7 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   `# Enable MLIR project` \
   -DLLVM_ENABLE_PROJECTS="mlir" \
   \
-  `# Target architectures - including RISC-V for future compatibility` \
+  `# Target architectures` \
   -DLLVM_TARGETS_TO_BUILD="X86;AArch64;RISCV;NVPTX;AMDGPU;SPIRV" \
   \
   `# Build monolithic shared libraries with C API` \
@@ -116,6 +116,11 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DLLVM_BUILD_LLVM_DYLIB=ON \
   -DLLVM_LINK_LLVM_DYLIB=ON \
   -DMLIR_BUILD_MLIR_C_DYLIB=ON \
+  \
+  `# Skip building tools (only need libraries for FFI)` \
+  -DLLVM_BUILD_TOOLS=OFF \
+  -DMLIR_BUILD_TOOLS=OFF \
+  -DLLVM_INCLUDE_TOOLS=OFF \
   \
   `# MLIR Feature Flags` \
   -DMLIR_ENABLE_EXECUTION_ENGINE=ON \
@@ -128,13 +133,12 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DLLVM_ENABLE_ASSERTIONS=OFF \
   -DLLVM_OPTIMIZED_TABLEGEN=ON \
   \
-  `# Symbol visibility control (smaller binaries, faster linking)` \
-  -DCMAKE_CXX_VISIBILITY_PRESET=hidden \
-  -DCMAKE_C_VISIBILITY_PRESET=hidden \
-  -DCMAKE_VISIBILITY_INLINES_HIDDEN=ON \
+  `# NOTE: Removed hidden visibility presets - they cause linker errors` \
+  `# when MLIR static libs link against dynamic libLLVM` \
   \
   `# Runtime path handling` \
   -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
+  -DCMAKE_MACOSX_RPATH=ON \
   \
   `# Compression` \
   -DLLVM_ENABLE_ZLIB=FORCE_ON \
