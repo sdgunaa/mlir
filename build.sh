@@ -40,6 +40,7 @@ detect_platform() {
 }
 
 PLATFORM_TAG=$(detect_platform)
+PLATFORM=${PLATFORM_TAG%%-*}  # Extract 'linux' or 'macos' from 'linux-x64'
 LLVM_VERSION="${LLVM_VERSION:-21}"
 
 # ----------------------
@@ -139,7 +140,7 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DLLVM_ENABLE_ZLIB=FORCE_ON \
   -DLLVM_ENABLE_ZSTD=OFF
 
-[ $? -ne 0 ] && err "CMake configuration failed!"
+
 
 # ----------------------
 # Build
@@ -156,7 +157,7 @@ else
   time cmake --build . --parallel "$JOBS"
 fi
 
-[ $? -ne 0 ] && err "Build failed!"
+
 
 # ----------------------
 # Install
@@ -169,7 +170,7 @@ else
   cmake --install .
 fi
 
-[ $? -ne 0 ] && err "Installation failed!"
+
 
 # ----------------------
 # Verification
@@ -232,7 +233,7 @@ echo ""
 echo "📦 Installation: $INSTALL_PREFIX"
 echo ""
 echo "📚 Libraries:"
-ls -lh lib/libLLVM*.${LIB_EXT}* lib/libMLIR*.${LIB_EXT}* 2>/dev/null | awk '{printf "   %-30s %10s\n", $9, $5}'
+ls -lh libLLVM*.${LIB_EXT}* libMLIR*.${LIB_EXT}* 2>/dev/null | awk '{printf "   %-30s %10s\n", $9, $5}'
 echo ""
 echo "🔧 For Mojo FFI usage:"
 echo "   The mlir/ffi/build.mojo module will automatically locate these libraries"
