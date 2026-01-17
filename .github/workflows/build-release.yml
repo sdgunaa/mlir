@@ -135,7 +135,7 @@ jobs:
           retention-days: 7
 
   build-macos-x64:
-    runs-on: macos-13  # Intel Mac
+    runs-on: macos-15-intel  # Intel Mac
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -191,7 +191,7 @@ jobs:
           retention-days: 7
 
   build-macos-arm64:
-    runs-on: macos-14  # Apple Silicon
+    runs-on: macos-15  # Apple Silicon
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
