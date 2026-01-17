@@ -8,9 +8,9 @@
 #
 # Supported Platforms:
 #   - Linux x86_64     (Ubuntu 22.04)
-#   - Linux ARM64      (Ubuntu 22.04 via QEMU emulation)
-#   - macOS x86_64     (macOS 15 Intel)
 #   - macOS ARM64      (macOS 15 Apple Silicon)
+#
+# Note: Linux ARM64 (QEMU) and macOS Intel removed due to slow build times.
 #
 # Usage:
 #   1. Manual trigger via Actions > Run workflow
@@ -139,149 +139,6 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # Linux ARM64 Build (via QEMU emulation)
-  # ---------------------------------------------------------------------------
-  build-linux-arm64:
-    name: Linux ARM64
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU for ARM64 emulation
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build in ARM64 container
-        run: |
-          echo "Starting ARM64 emulated build..."
-          docker run --platform linux/arm64 --rm \
-            -v $PWD:/workspace \
-            -w /workspace \
-            ubuntu:22.04 bash -c "
-              set -e
-              echo 'Installing dependencies...'
-              apt-get update && \
-              apt-get install -y cmake ninja-build python3 git zlib1g-dev g++ && \
-              echo 'Cloning LLVM...' && \
-              git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
-                https://github.com/llvm/llvm-project.git && \
-              echo 'Building LLVM and MLIR...' && \
-              chmod +x build.sh && \
-              LLVM_VERSION=${{ github.event.inputs.llvm_version || '21' }} JOBS=4 ./build.sh && \
-              echo 'Build completed successfully'
-            "
-
-      - name: Create distribution packages
-        run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-arm64)
-          VERSION=${{ github.event.inputs.llvm_version || '21' }}
-          
-          echo "Creating distribution packages..."
-          
-          # Minimal package
-          echo "Building minimal package..."
-          mkdir -p ${INSTALL_DIR}-minimal/lib
-          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/
-          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
-          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
-          sha256sum ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
-          
-          # Full package
-          echo "Building full package..."
-          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
-          sha256sum ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
-          
-          echo "Packages created:"
-          ls -lh *.tar.gz
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-arm64
-          path: |
-            llvm-mlir-*-linux-arm64-minimal.tar.gz*
-            llvm-mlir-*-linux-arm64-full.tar.gz*
-          retention-days: 7
-
-  # ---------------------------------------------------------------------------
-  # macOS x86_64 (Intel) Build
-  # ---------------------------------------------------------------------------
-  build-macos-x64:
-    name: macOS Intel (x86_64)
-    runs-on: macos-15-intel
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          echo "Installing Homebrew packages..."
-          brew install cmake ninja || true
-          # Python 3 is pre-installed on GitHub runners; skip to avoid link conflicts
-          echo "Dependencies installed"
-
-      - name: Clone LLVM source
-        run: |
-          echo "Cloning LLVM from branch: ${{ github.event.inputs.llvm_branch || 'release/21.x' }}"
-          git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
-            https://github.com/llvm/llvm-project.git
-          echo "LLVM source cloned"
-
-      - name: Build LLVM and MLIR
-        run: |
-          chmod +x build.sh
-          echo "Starting build with ${{ env.DEFAULT_JOBS }} parallel jobs..."
-          ./build.sh
-        env:
-          LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
-          JOBS: 4
-
-      - name: Verify C API symbols
-        run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-x64)
-          echo "Verifying build outputs in: ${INSTALL_DIR}"
-          
-          echo "Checking LLVM C API..."
-          nm -D ${INSTALL_DIR}/lib/libLLVM.dylib 2>/dev/null | grep -q "LLVMContextCreate" || \
-          nm ${INSTALL_DIR}/lib/libLLVM.dylib | grep -q "LLVMContextCreate" || exit 1
-          echo "LLVM C API verified"
-
-      - name: Create distribution packages
-        run: |
-          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-x64)
-          VERSION=${{ github.event.inputs.llvm_version || '21' }}
-          
-          echo "Creating distribution packages..."
-          
-          # Minimal package
-          echo "Building minimal package..."
-          mkdir -p ${INSTALL_DIR}-minimal/lib
-          cp -r ${INSTALL_DIR}/lib/*.dylib ${INSTALL_DIR}-minimal/lib/ || true
-          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/ || true
-          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
-          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
-          shasum -a 256 ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
-          
-          # Full package
-          echo "Building full package..."
-          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
-          shasum -a 256 ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
-          
-          echo "Packages created:"
-          ls -lh *.tar.gz
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x64
-          path: |
-            llvm-mlir-*-macos-x64-minimal.tar.gz*
-            llvm-mlir-*-macos-x64-full.tar.gz*
-          retention-days: 7
-
-  # ---------------------------------------------------------------------------
   # macOS ARM64 (Apple Silicon) Build
   # ---------------------------------------------------------------------------
   build-macos-arm64:
@@ -364,7 +221,7 @@ jobs:
   # ---------------------------------------------------------------------------
   create-release:
     name: Create Release
-    needs: [build-linux-x64, build-linux-arm64, build-macos-x64, build-macos-arm64]
+    needs: [build-linux-x64, build-macos-arm64]
     runs-on: ubuntu-latest
 
     steps:
@@ -399,11 +256,11 @@ jobs:
             | Platform | Minimal (Runtime Only) | Full (Headers + Tools) |
             |----------|------------------------|------------------------|
             | Linux x86_64 | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-full.tar.gz` |
-            | Linux ARM64 | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-arm64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-arm64-full.tar.gz` |
-            | macOS Intel | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-x64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-x64-full.tar.gz` |
             | macOS Apple Silicon | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-minimal.tar.gz` | `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-full.tar.gz` |
             
             **Note:** Use the Minimal package (~50-80 MB) for runtime FFI. Use Full (~180-220 MB) for development.
+            
+            > Linux ARM64 and macOS Intel builds are available on request (slower build times).
             
             ---
             
