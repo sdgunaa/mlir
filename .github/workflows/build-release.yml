@@ -65,6 +65,7 @@ jobs:
   build-linux-x64:
     name: Linux x86_64
     runs-on: ubuntu-22.04
+    continue-on-error: true  # Don't block other jobs if this fails
 
     steps:
       - name: Checkout repository
@@ -144,6 +145,7 @@ jobs:
   build-macos-arm64:
     name: macOS Apple Silicon (ARM64)
     runs-on: macos-15
+    continue-on-error: true  # Don't block other jobs if this fails
 
     steps:
       - name: Checkout repository
@@ -223,21 +225,54 @@ jobs:
     name: Create Release
     needs: [build-linux-x64, build-macos-arm64]
     runs-on: ubuntu-latest
+    if: always()  # Run even if some builds failed
 
     steps:
+      - name: Check if any builds succeeded
+        id: check-builds
+        run: |
+          # At least one build must have succeeded to create a release
+          if [[ "${{ needs.build-linux-x64.result }}" == "success" ]] || \
+             [[ "${{ needs.build-macos-arm64.result }}" == "success" ]]; then
+            echo "has_artifacts=true" >> $GITHUB_OUTPUT
+            echo "At least one build succeeded, proceeding with release"
+          else
+            echo "has_artifacts=false" >> $GITHUB_OUTPUT
+            echo "All builds failed, skipping release"
+            exit 1
+          fi
+
       - name: Download all platform artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+        continue-on-error: true  # Some artifacts may not exist
 
       - name: Prepare release assets
         run: |
           echo "Collecting release assets from all platforms..."
           mkdir -p release-assets
-          find artifacts -name "*.tar.gz*" -exec cp {} release-assets/ \;
+          
+          # Copy whatever artifacts exist
+          find artifacts -name "*.tar.gz*" -exec cp {} release-assets/ \; 2>/dev/null || true
+          
+          # Check what we have
+          ASSET_COUNT=$(ls -1 release-assets/*.tar.gz 2>/dev/null | wc -l || echo 0)
+          echo "Found ${ASSET_COUNT} packages"
+          
+          if [ "$ASSET_COUNT" -eq 0 ]; then
+            echo "ERROR: No artifacts found!"
+            exit 1
+          fi
           
           echo "Release assets ready:"
           ls -lh release-assets/
+          
+          # Report which platforms succeeded
+          echo ""
+          echo "=== Build Status ==="
+          echo "Linux x86_64: ${{ needs.build-linux-x64.result }}"
+          echo "macOS ARM64:  ${{ needs.build-macos-arm64.result }}"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v1
