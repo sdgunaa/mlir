@@ -218,7 +218,8 @@ jobs:
       - name: Install build dependencies
         run: |
           echo "Installing Homebrew packages..."
-          brew install cmake ninja python@3.12
+          brew install cmake ninja || true
+          # Python 3 is pre-installed on GitHub runners; skip to avoid link conflicts
           echo "Dependencies installed"
 
       - name: Clone LLVM source
@@ -294,7 +295,8 @@ jobs:
       - name: Install build dependencies
         run: |
           echo "Installing Homebrew packages..."
-          brew install cmake ninja python@3.12
+          brew install cmake ninja || true
+          # Python 3 is pre-installed on GitHub runners; skip to avoid link conflicts
           echo "Dependencies installed"
 
       - name: Clone LLVM source
