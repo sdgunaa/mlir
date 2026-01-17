@@ -130,14 +130,14 @@ jobs:
           echo "Verifying build outputs in: ${INSTALL_DIR}"
           
           echo "Checking LLVM C API..."
-          if ! nm -D "${INSTALL_DIR}/lib/libLLVM.so"* 2>/dev/null | grep -q "LLVMContextCreate"; then
+          if ! nm -D "${INSTALL_DIR}"/lib/libLLVM.so* 2>/dev/null | grep -q "LLVMContextCreate"; then
             echo "::error::LLVM C API symbols not found"
             exit 1
           fi
           echo "LLVM C API verified"
           
           echo "Checking MLIR C API..."
-          if ! nm -D "${INSTALL_DIR}/lib/libMLIR-C.so"* 2>/dev/null | grep -q "mlirContextCreate"; then
+          if ! nm -D "${INSTALL_DIR}"/lib/libMLIR-C.so* 2>/dev/null | grep -q "mlirContextCreate"; then
             echo "::error::MLIR C API symbols not found"
             exit 1
           fi
