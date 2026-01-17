@@ -122,7 +122,7 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DLLVM_BUILD_TOOLS=OFF \
   -DLLVM_BUILD_UTILS=OFF \
   -DLLVM_INCLUDE_TOOLS=ON \
-  -DLLVM_INCLUDE_UTILS=ON \
+  -DLLVM_INCLUDE_UTILS=OFF \
   -DLLVM_INCLUDE_TESTS=OFF \
   -DLLVM_INCLUDE_EXAMPLES=OFF \
   -DLLVM_INCLUDE_BENCHMARKS=OFF \
@@ -156,26 +156,35 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
 
 
 # ----------------------
-# Build
+# Build - Stage 1: TableGen
 # ----------------------
-info "Building LLVM+MLIR libraries only (skipping tools)..."
-info "This will take 30-60 minutes depending on your CPU"
+info "Stage 1: Building TableGen generators (required for ODS code generation)..."
 echo ""
 
 cd "$BUILD_DIR"
 
-# Build ONLY the libraries we need, not everything
-# This avoids tool dependency issues
-BUILD_TARGETS="LLVM"
-
-# Try to build MLIR-C if the target exists
 if [ "$GENERATOR" = "Ninja" ]; then
-  if ninja -t targets 2>/dev/null | grep -q "^MLIR-C:"; then
-    BUILD_TARGETS="$BUILD_TARGETS MLIR-C"
-  fi
-  time ninja -j "$JOBS" $BUILD_TARGETS
+  ninja -j "$JOBS" llvm-tblgen mlir-tblgen
 else
-  time cmake --build . --parallel "$JOBS" --target LLVM
+  cmake --build . --target llvm-tblgen --parallel "$JOBS"
+  cmake --build . --target mlir-tblgen --parallel "$JOBS"
+fi
+
+info "TableGen built successfully"
+echo ""
+
+# ----------------------
+# Build - Stage 2: Libraries
+# ----------------------
+info "Stage 2: Building LLVM + MLIR shared libraries..."
+info "This will take 30-60 minutes depending on your CPU"
+echo ""
+
+# Build everything (tools/tests are disabled in CMake config, so only libs are built)
+if [ "$GENERATOR" = "Ninja" ]; then
+  time ninja -j "$JOBS"
+else
+  time cmake --build . --parallel "$JOBS"
 fi
 
 
