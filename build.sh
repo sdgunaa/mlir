@@ -117,10 +117,16 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DLLVM_LINK_LLVM_DYLIB=ON \
   -DMLIR_BUILD_MLIR_C_DYLIB=ON \
   \
-  `# Skip building tools (only need libraries for FFI)` \
+  `# Skip building tools, utilities, tests, examples (only need libraries for FFI)` \
   -DLLVM_BUILD_TOOLS=OFF \
-  -DMLIR_BUILD_TOOLS=OFF \
+  -DLLVM_BUILD_UTILS=OFF \
   -DLLVM_INCLUDE_TOOLS=OFF \
+  -DLLVM_INCLUDE_UTILS=OFF \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_INCLUDE_EXAMPLES=OFF \
+  -DLLVM_INCLUDE_BENCHMARKS=OFF \
+  -DMLIR_BUILD_TOOLS=OFF \
+  -DMLIR_INCLUDE_TESTS=OFF \
   \
   `# MLIR Feature Flags` \
   -DMLIR_ENABLE_EXECUTION_ENGINE=ON \
