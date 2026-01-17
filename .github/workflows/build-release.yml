@@ -16,6 +16,7 @@
 #   - Concurrency control to prevent duplicate runs
 #   - Timeouts to prevent hung builds from blocking resources
 #   - Retry logic for network operations
+#   - Automatic version derivation from release tag
 #
 # Assumptions (from build.sh):
 #   - Creates llvm-mlir-${VERSION}-${platform} directories
@@ -66,12 +67,12 @@ concurrency:
 
 # =============================================================================
 # ENVIRONMENT DEFAULTS
+# Note: LLVM_VERSION is refined per-job to handle tag-derived versions.
 # =============================================================================
 env:
   DEFAULT_JOBS: 4
   ARTIFACT_RETENTION_DAYS: 7
-  # Computed version: use input for dispatch, extract from tag for push
-  LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
+  LLVM_VERSION_INPUT: ${{ github.event.inputs.llvm_version || '' }}
   LLVM_BRANCH: ${{ github.event.inputs.llvm_branch || 'release/21.x' }}
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
 
@@ -92,10 +93,38 @@ jobs:
     outputs:
       result: ${{ steps.set-result.outputs.status }}
       artifact_name: ${{ steps.package.outputs.artifact_name }}
+      minimal_pkg: ${{ steps.package.outputs.minimal_pkg }}
+      full_pkg: ${{ steps.package.outputs.full_pkg }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Compute effective LLVM_VERSION
+        run: |
+          set -euo pipefail
+          
+          INPUT_VERSION="${{ env.LLVM_VERSION_INPUT }}"
+          TAG="${{ env.RELEASE_TAG }}"
+          
+          # Prefer explicit input if provided
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            echo "Using supplied LLVM_VERSION=${INPUT_VERSION}"
+            echo "LLVM_VERSION=${INPUT_VERSION}" >> $GITHUB_ENV
+          # Otherwise derive from release tag (e.g., v21.1.8 -> 21)
+          elif [[ -n "${TAG}" && "${TAG}" =~ ^v([0-9]+) ]]; then
+            DERIVED="${BASH_REMATCH[1]}"
+            echo "Derived LLVM_VERSION=${DERIVED} from RELEASE_TAG=${TAG}"
+            echo "LLVM_VERSION=${DERIVED}" >> $GITHUB_ENV
+            
+            # Also derive branch if not explicitly set
+            if [[ -z "${{ github.event.inputs.llvm_branch }}" ]]; then
+              echo "LLVM_BRANCH=release/${DERIVED}.x" >> $GITHUB_ENV
+            fi
+          else
+            echo "Falling back to default LLVM_VERSION=21"
+            echo "LLVM_VERSION=21" >> $GITHUB_ENV
+          fi
 
       - name: Clean workspace
         run: |
@@ -112,6 +141,7 @@ jobs:
           echo "Workspace: ${GITHUB_WORKSPACE}"
           echo "LLVM Version: ${{ env.LLVM_VERSION }}"
           echo "LLVM Branch: ${{ env.LLVM_BRANCH }}"
+          echo "Release Tag: ${{ env.RELEASE_TAG }}"
           echo "Available disk space:"
           df -h .
           echo ""
@@ -123,7 +153,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build python3 zlib1g-dev g++ file
           
-          # Verify installations
           cmake --version || { echo "::error::cmake not found"; exit 1; }
           ninja --version || { echo "::error::ninja not found"; exit 1; }
           g++ --version || { echo "::error::g++ not found"; exit 1; }
@@ -211,12 +240,14 @@ jobs:
           # Find ELF shared object for LLVM (avoid linker scripts)
           echo "Checking LLVM C API..."
           LLVM_LIB=""
+          shopt -s nullglob
           for f in "${INSTALL_DIR}"/lib/libLLVM*.so*; do
             if [[ -f "$f" ]] && file "$f" | grep -q "ELF"; then
               LLVM_LIB="$f"
               break
             fi
           done
+          shopt -u nullglob
           
           if [[ -z "${LLVM_LIB}" ]]; then
             echo "::error::No ELF libLLVM shared object found"
@@ -233,12 +264,14 @@ jobs:
           # Find ELF shared object for MLIR C API
           echo "Checking MLIR C API..."
           MLIR_LIB=""
+          shopt -s nullglob
           for f in "${INSTALL_DIR}"/lib/libMLIR-C*.so*; do
             if [[ -f "$f" ]] && file "$f" | grep -q "ELF"; then
               MLIR_LIB="$f"
               break
             fi
           done
+          shopt -u nullglob
           
           if [[ -z "${MLIR_LIB}" ]]; then
             echo "::error::No ELF libMLIR-C shared object found"
@@ -271,11 +304,13 @@ jobs:
           mkdir -p "${MINIMAL_DIR}/lib"
           
           # Copy only ELF shared libraries
+          shopt -s nullglob
           for f in "${INSTALL_DIR}"/lib/*.so*; do
             if [[ -f "$f" ]] && file "$f" | grep -q "ELF"; then
               cp "$f" "${MINIMAL_DIR}/lib/"
             fi
           done
+          shopt -u nullglob
           
           echo "LLVM ${VERSION}" > "${MINIMAL_DIR}/lib/version.txt"
           
@@ -297,7 +332,10 @@ jobs:
           echo "Packages created:"
           ls -lh *.tar.gz
           
+          # Export exact filenames
           echo "artifact_name=${INSTALL_DIR}" >> $GITHUB_OUTPUT
+          echo "minimal_pkg=$(basename ${MINIMAL_PKG})" >> $GITHUB_OUTPUT
+          echo "full_pkg=$(basename ${FULL_PKG})" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -318,7 +356,6 @@ jobs:
           set -euo pipefail
           STATUS=success
           
-          # Check critical step outcomes
           if [[ "${{ steps.build.outcome }}" != "success" ]]; then
             STATUS=failure
             echo "Build step failed"
@@ -349,10 +386,35 @@ jobs:
     outputs:
       result: ${{ steps.set-result.outputs.status }}
       artifact_name: ${{ steps.package.outputs.artifact_name }}
+      minimal_pkg: ${{ steps.package.outputs.minimal_pkg }}
+      full_pkg: ${{ steps.package.outputs.full_pkg }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Compute effective LLVM_VERSION
+        run: |
+          set -euo pipefail
+          
+          INPUT_VERSION="${{ env.LLVM_VERSION_INPUT }}"
+          TAG="${{ env.RELEASE_TAG }}"
+          
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            echo "Using supplied LLVM_VERSION=${INPUT_VERSION}"
+            echo "LLVM_VERSION=${INPUT_VERSION}" >> $GITHUB_ENV
+          elif [[ -n "${TAG}" && "${TAG}" =~ ^v([0-9]+) ]]; then
+            DERIVED="${BASH_REMATCH[1]}"
+            echo "Derived LLVM_VERSION=${DERIVED} from RELEASE_TAG=${TAG}"
+            echo "LLVM_VERSION=${DERIVED}" >> $GITHUB_ENV
+            
+            if [[ -z "${{ github.event.inputs.llvm_branch }}" ]]; then
+              echo "LLVM_BRANCH=release/${DERIVED}.x" >> $GITHUB_ENV
+            fi
+          else
+            echo "Falling back to default LLVM_VERSION=21"
+            echo "LLVM_VERSION=21" >> $GITHUB_ENV
+          fi
 
       - name: Clean workspace
         run: |
@@ -369,6 +431,7 @@ jobs:
           echo "Workspace: ${GITHUB_WORKSPACE}"
           echo "LLVM Version: ${{ env.LLVM_VERSION }}"
           echo "LLVM Branch: ${{ env.LLVM_BRANCH }}"
+          echo "Release Tag: ${{ env.RELEASE_TAG }}"
           echo "Available disk space:"
           df -h .
           echo ""
@@ -467,12 +530,14 @@ jobs:
           # Check LLVM C API (macOS uses Mach-O)
           echo "Checking LLVM C API..."
           LLVM_LIB=""
+          shopt -s nullglob
           for f in "${INSTALL_DIR}"/lib/libLLVM*.dylib; do
             if [[ -f "$f" ]] && file "$f" | grep -q "Mach-O"; then
               LLVM_LIB="$f"
               break
             fi
           done
+          shopt -u nullglob
           
           if [[ -z "${LLVM_LIB}" ]]; then
             echo "::error::No Mach-O libLLVM dylib found"
@@ -489,12 +554,14 @@ jobs:
           # Check MLIR C API
           echo "Checking MLIR C API..."
           MLIR_LIB=""
+          shopt -s nullglob
           for f in "${INSTALL_DIR}"/lib/libMLIR-C*.dylib; do
             if [[ -f "$f" ]] && file "$f" | grep -q "Mach-O"; then
               MLIR_LIB="$f"
               break
             fi
           done
+          shopt -u nullglob
           
           if [[ -z "${MLIR_LIB}" ]]; then
             echo "::error::No Mach-O libMLIR-C dylib found"
@@ -527,11 +594,13 @@ jobs:
           mkdir -p "${MINIMAL_DIR}/lib"
           
           # Copy Mach-O shared libraries
+          shopt -s nullglob
           for f in "${INSTALL_DIR}"/lib/*.dylib; do
             if [[ -f "$f" ]] && file "$f" | grep -q "Mach-O"; then
               cp "$f" "${MINIMAL_DIR}/lib/"
             fi
           done
+          shopt -u nullglob
           
           echo "LLVM ${VERSION}" > "${MINIMAL_DIR}/lib/version.txt"
           
@@ -554,7 +623,10 @@ jobs:
           echo "Packages created:"
           ls -lh *.tar.gz
           
+          # Export exact filenames
           echo "artifact_name=${INSTALL_DIR}" >> $GITHUB_OUTPUT
+          echo "minimal_pkg=$(basename ${MINIMAL_PKG})" >> $GITHUB_OUTPUT
+          echo "full_pkg=$(basename ${FULL_PKG})" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -575,7 +647,6 @@ jobs:
           set -euo pipefail
           STATUS=success
           
-          # Check critical step outcomes
           if [[ "${{ steps.build.outcome }}" != "success" ]]; then
             STATUS=failure
             echo "Build step failed"
@@ -607,6 +678,21 @@ jobs:
     if: always()
 
     steps:
+      - name: Compute effective LLVM_VERSION
+        run: |
+          set -euo pipefail
+          
+          INPUT_VERSION="${{ env.LLVM_VERSION_INPUT }}"
+          TAG="${{ env.RELEASE_TAG }}"
+          
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            echo "LLVM_VERSION=${INPUT_VERSION}" >> $GITHUB_ENV
+          elif [[ -n "${TAG}" && "${TAG}" =~ ^v([0-9]+) ]]; then
+            echo "LLVM_VERSION=${BASH_REMATCH[1]}" >> $GITHUB_ENV
+          else
+            echo "LLVM_VERSION=21" >> $GITHUB_ENV
+          fi
+
       - name: Evaluate build results
         id: evaluate
         run: |
@@ -634,7 +720,7 @@ jobs:
             echo "::error::All builds failed. Cannot create release."
             echo "should_release=false" >> $GITHUB_OUTPUT
             echo "success_count=0" >> $GITHUB_OUTPUT
-            # Exit 0 for graceful degradation - workflow stays green
+            # Graceful degradation: workflow stays green
             exit 0
           fi
           
@@ -677,11 +763,17 @@ jobs:
           echo "Release assets:"
           ls -lh release-assets/
           
-          # Determine actual filenames for release body
-          LINUX_MINIMAL=$(ls release-assets/*linux-x64-minimal.tar.gz 2>/dev/null | xargs -n1 basename || echo "Not available")
-          LINUX_FULL=$(ls release-assets/*linux-x64-full.tar.gz 2>/dev/null | xargs -n1 basename || echo "Not available")
-          MACOS_MINIMAL=$(ls release-assets/*macos-arm64-minimal.tar.gz 2>/dev/null | xargs -n1 basename || echo "Not available")
-          MACOS_FULL=$(ls release-assets/*macos-arm64-full.tar.gz 2>/dev/null | xargs -n1 basename || echo "Not available")
+          # Get exact filenames (newest first if multiple exist)
+          LINUX_MINIMAL=$(ls -1t release-assets/*linux-x64-minimal.tar.gz 2>/dev/null | head -1 || echo "")
+          LINUX_FULL=$(ls -1t release-assets/*linux-x64-full.tar.gz 2>/dev/null | head -1 || echo "")
+          MACOS_MINIMAL=$(ls -1t release-assets/*macos-arm64-minimal.tar.gz 2>/dev/null | head -1 || echo "")
+          MACOS_FULL=$(ls -1t release-assets/*macos-arm64-full.tar.gz 2>/dev/null | head -1 || echo "")
+          
+          # Convert to basenames or "Not available"
+          [[ -n "${LINUX_MINIMAL}" ]] && LINUX_MINIMAL=$(basename "${LINUX_MINIMAL}") || LINUX_MINIMAL="Not available"
+          [[ -n "${LINUX_FULL}" ]] && LINUX_FULL=$(basename "${LINUX_FULL}") || LINUX_FULL="Not available"
+          [[ -n "${MACOS_MINIMAL}" ]] && MACOS_MINIMAL=$(basename "${MACOS_MINIMAL}") || MACOS_MINIMAL="Not available"
+          [[ -n "${MACOS_FULL}" ]] && MACOS_FULL=$(basename "${MACOS_FULL}") || MACOS_FULL="Not available"
           
           LINUX_STATUS="Not available"
           MACOS_STATUS="Not available"
