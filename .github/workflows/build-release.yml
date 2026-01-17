@@ -26,7 +26,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.event.inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -42,7 +42,6 @@ jobs:
     name: Linux x86_64
     runs-on: ubuntu-22.04
     timeout-minutes: 180
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +94,6 @@ jobs:
     name: macOS ARM64
     runs-on: macos-15
     timeout-minutes: 180
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
