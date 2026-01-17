@@ -158,16 +158,24 @@ cmake -S "$LLVM_SRC/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
 # ----------------------
 # Build
 # ----------------------
-info "Building LLVM+MLIR..."
-info "This will take 40-90 minutes depending on your CPU"
+info "Building LLVM+MLIR libraries only (skipping tools)..."
+info "This will take 30-60 minutes depending on your CPU"
 echo ""
 
 cd "$BUILD_DIR"
 
+# Build ONLY the libraries we need, not everything
+# This avoids tool dependency issues
+BUILD_TARGETS="LLVM"
+
+# Try to build MLIR-C if the target exists
 if [ "$GENERATOR" = "Ninja" ]; then
-  time ninja -j "$JOBS"
+  if ninja -t targets 2>/dev/null | grep -q "^MLIR-C:"; then
+    BUILD_TARGETS="$BUILD_TARGETS MLIR-C"
+  fi
+  time ninja -j "$JOBS" $BUILD_TARGETS
 else
-  time cmake --build . --parallel "$JOBS"
+  time cmake --build . --parallel "$JOBS" --target LLVM
 fi
 
 
