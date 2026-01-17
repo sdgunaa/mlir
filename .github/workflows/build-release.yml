@@ -1,0 +1,326 @@
+name: Build LLVM+MLIR Multi-Platform Release
+
+on:
+  # Manual trigger - you control when to build
+  workflow_dispatch:
+    inputs:
+      llvm_version:
+        description: 'LLVM version to build (e.g., 21, 22)'
+        required: true
+        default: '21'
+      llvm_branch:
+        description: 'LLVM branch/tag (e.g., release/21.x, release/22.x)'
+        required: true
+        default: 'release/21.x'
+      release_tag:
+        description: 'Release tag (e.g., v21.1.8)'
+        required: true
+  
+  # Optional: Auto-trigger on version tags
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux-x64:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 zlib1g-dev g++
+      
+      - name: Clone LLVM
+        run: |
+          git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
+            https://github.com/llvm/llvm-project.git
+      
+      - name: Build LLVM+MLIR
+        run: |
+          chmod +x build.sh
+          ./build.sh
+        env:
+          LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
+          JOBS: 4
+      
+      - name: Verify C API symbols
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-x64)
+          echo "Checking LLVM C API..."
+          nm -D ${INSTALL_DIR}/lib/libLLVM.so* | grep -q "LLVMContextCreate" || exit 1
+          echo "✅ LLVM C API verified"
+          
+          echo "Checking MLIR C API..."
+          nm -D ${INSTALL_DIR}/lib/libMLIR-C.so* | grep -q "mlirContextCreate" || exit 1
+          echo "✅ MLIR C API verified"
+      
+      - name: Create packages
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-x64)
+          VERSION=${{ github.event.inputs.llvm_version || '21' }}
+          
+          # Create minimal package (just libs)
+          mkdir -p ${INSTALL_DIR}-minimal/lib
+          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/
+          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
+          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
+          sha256sum ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
+          
+          # Create full package
+          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
+          sha256sum ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
+          
+          # Show sizes
+          ls -lh *.tar.gz
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            llvm-mlir-*-linux-x64-minimal.tar.gz*
+            llvm-mlir-*-linux-x64-full.tar.gz*
+          retention-days: 7
+
+  build-linux-arm64:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up QEMU for ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Build in ARM64 container
+        run: |
+          docker run --platform linux/arm64 --rm \
+            -v $PWD:/workspace \
+            -w /workspace \
+            ubuntu:22.04 bash -c "
+              set -e
+              apt-get update && \
+              apt-get install -y cmake ninja-build python3 git zlib1g-dev g++ && \
+              git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
+                https://github.com/llvm/llvm-project.git && \
+              chmod +x build.sh && \
+              LLVM_VERSION=${{ github.event.inputs.llvm_version || '21' }} JOBS=4 ./build.sh
+            "
+      
+      - name: Create packages
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-linux-arm64)
+          VERSION=${{ github.event.inputs.llvm_version || '21' }}
+          
+          # Minimal package
+          mkdir -p ${INSTALL_DIR}-minimal/lib
+          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/
+          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
+          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
+          sha256sum ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
+          
+          # Full package
+          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
+          sha256sum ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: |
+            llvm-mlir-*-linux-arm64-minimal.tar.gz*
+            llvm-mlir-*-linux-arm64-full.tar.gz*
+          retention-days: 7
+
+  build-macos-x64:
+    runs-on: macos-13  # Intel Mac
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: brew install cmake ninja python@3.12
+      
+      - name: Clone LLVM
+        run: |
+          git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
+            https://github.com/llvm/llvm-project.git
+      
+      - name: Build LLVM+MLIR
+        run: |
+          chmod +x build.sh
+          ./build.sh
+        env:
+          LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
+          JOBS: 4
+      
+      - name: Verify C API symbols
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-x64)
+          echo "Checking LLVM C API..."
+          nm -D ${INSTALL_DIR}/lib/libLLVM.dylib 2>/dev/null | grep -q "LLVMContextCreate" || \
+          nm ${INSTALL_DIR}/lib/libLLVM.dylib | grep -q "LLVMContextCreate" || exit 1
+          echo "✅ LLVM C API verified"
+      
+      - name: Create packages
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-x64)
+          VERSION=${{ github.event.inputs.llvm_version || '21' }}
+          
+          # Minimal package
+          mkdir -p ${INSTALL_DIR}-minimal/lib
+          cp -r ${INSTALL_DIR}/lib/*.dylib ${INSTALL_DIR}-minimal/lib/ || true
+          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/ || true
+          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
+          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
+          shasum -a 256 ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
+          
+          # Full package
+          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
+          shasum -a 256 ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: |
+            llvm-mlir-*-macos-x64-minimal.tar.gz*
+            llvm-mlir-*-macos-x64-full.tar.gz*
+          retention-days: 7
+
+  build-macos-arm64:
+    runs-on: macos-14  # Apple Silicon
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: brew install cmake ninja python@3.12
+      
+      - name: Clone LLVM
+        run: |
+          git clone --depth=1 --branch=${{ github.event.inputs.llvm_branch || 'release/21.x' }} \
+            https://github.com/llvm/llvm-project.git
+      
+      - name: Build LLVM+MLIR
+        run: |
+          chmod +x build.sh
+          ./build.sh
+        env:
+          LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21' }}
+          JOBS: 4
+      
+      - name: Verify C API symbols
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-arm64)
+          echo "Checking LLVM C API..."
+          nm -D ${INSTALL_DIR}/lib/libLLVM.dylib 2>/dev/null | grep -q "LLVMContextCreate" || \
+          nm ${INSTALL_DIR}/lib/libLLVM.dylib | grep -q "LLVMContextCreate" || exit 1
+          echo "✅ LLVM C API verified"
+      
+      - name: Create packages
+        run: |
+          INSTALL_DIR=$(ls -d llvm-mlir-*-macos-arm64)
+          VERSION=${{ github.event.inputs.llvm_version || '21' }}
+          
+          # Minimal package
+          mkdir -p ${INSTALL_DIR}-minimal/lib
+          cp -r ${INSTALL_DIR}/lib/*.dylib ${INSTALL_DIR}-minimal/lib/ || true
+          cp -r ${INSTALL_DIR}/lib/*.so* ${INSTALL_DIR}-minimal/lib/ || true
+          echo "LLVM ${VERSION}" > ${INSTALL_DIR}-minimal/lib/version.txt
+          tar -czf ${INSTALL_DIR}-minimal.tar.gz ${INSTALL_DIR}-minimal
+          shasum -a 256 ${INSTALL_DIR}-minimal.tar.gz > ${INSTALL_DIR}-minimal.tar.gz.sha256
+          
+          # Full package
+          tar -czf ${INSTALL_DIR}-full.tar.gz ${INSTALL_DIR}
+          shasum -a 256 ${INSTALL_DIR}-full.tar.gz > ${INSTALL_DIR}-full.tar.gz.sha256
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            llvm-mlir-*-macos-arm64-minimal.tar.gz*
+            llvm-mlir-*-macos-arm64-full.tar.gz*
+          retention-days: 7
+
+  create-release:
+    needs: [build-linux-x64, build-linux-arm64, build-macos-x64, build-macos-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "*.tar.gz*" -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: LLVM ${{ github.event.inputs.llvm_version || '21' }} + MLIR C API
+          body: |
+            # LLVM ${{ github.event.inputs.llvm_version || '21' }} + MLIR C API - Prebuilt Binaries
+            
+            Built with full C API support for FFI usage (Mojo, etc.)
+            
+            ## 📦 Download for Your Platform
+            
+            ### Linux x86_64
+            - **Minimal** (recommended for Mojo FFI): `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-minimal.tar.gz` (~50-80 MB)
+            - **Full** (with headers & tools): `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-x64-full.tar.gz` (~180-220 MB)
+            
+            ### Linux ARM64
+            - **Minimal**: `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-arm64-minimal.tar.gz` (~50-80 MB)
+            - **Full**: `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-linux-arm64-full.tar.gz` (~180-220 MB)
+            
+            ### macOS Intel (x86_64)
+            - **Minimal**: `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-x64-minimal.tar.gz` (~50-80 MB)
+            - **Full**: `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-x64-full.tar.gz` (~180-220 MB)
+            
+            ### macOS Apple Silicon (ARM64)
+            - **Minimal**: `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-minimal.tar.gz` (~50-80 MB)
+            - **Full**: `llvm-mlir-${{ github.event.inputs.llvm_version || '21' }}-macos-arm64-full.tar.gz` (~180-220 MB)
+            
+            ## ✅ Verification
+            
+            ```bash
+            # Extract
+            tar -xzf llvm-mlir-*-minimal.tar.gz
+            
+            # Check C API symbols (Linux)
+            nm -D llvm-mlir-*/lib/libLLVM.so* | grep LLVMContextCreate
+            
+            # Check C API symbols (macOS)
+            nm llvm-mlir-*/lib/libLLVM.dylib | grep LLVMContextCreate
+            ```
+            
+            ## 🔧 For Mojo FFI
+            
+            The `mlir/ffi/build.mojo` module automatically downloads the correct minimal package for your platform.
+            
+            ## 📋 Build Configuration
+            
+            - **LLVM Branch**: ${{ github.event.inputs.llvm_branch || 'release/21.x' }}
+            - **Targets**: X86, AArch64, RISCV, NVPTX, AMDGPU, SPIRV
+            - **MLIR Features**:
+              - Execution Engine: ON
+              - PDL (Pattern Description Language): ON
+              - IRDL (IR Definition Language): ON
+              - Transform Dialect: ON
+            
+            ## 📝 SHA256 Checksums
+            
+            See the `.sha256` files for each package to verify download integrity.
+          files: release-assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

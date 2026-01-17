@@ -2,5 +2,5 @@
 .pixi/*
 !.pixi/config.toml
 
-# Vendor binaries
-vendors/
+# kgen generated files
+kgen*

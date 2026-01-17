@@ -10,18 +10,21 @@ This module provides the low-level FFI infrastructure for loading MLIR and LLVM
 shared libraries and accessing their C API functions. It uses Mojo's built-in
 FFI capabilities to dynamically load libraries and resolve symbols.
 
-The module automatically searches for libraries in the following order:
-1. `vendors/mlir-capi/` (custom-built C API library)
-2. `vendors/llvm-current/lib/` (project-local installation)
-3. `/usr/lib/llvm-{21,20,19}/lib/` (system APT installation)
-4. System library paths (via `LD_LIBRARY_PATH`)
-
-NOTE: The MLIR C API is only distributed as static libraries by LLVM.
-      Use scripts/buildMlirCApi.sh to build the shared library first.
+The module automatically ensures the library is available by:
+1. Checking for a cached build in `~/.cache/mlir-mojo/`
+2. Detecting system MLIR/LLVM static libraries
+3. Building a monolithic shared library from static archives if needed
 """
 
 from pathlib import Path
+from os import getenv
 from sys.ffi import OwnedDLHandle, _Global, _get_dylib_function, _find_dylib
+from .build import (
+    ensure_mlir_c_library,
+    get_platform,
+    _get_lib_path,
+    _is_cache_valid,
+)
 
 
 # ===----------------------------------------------------------------------=== #
@@ -32,28 +35,44 @@ from sys.ffi import OwnedDLHandle, _Global, _get_dylib_function, _find_dylib
 fn _load_mlir_library() -> OwnedDLHandle:
     """Load the MLIR C API shared library.
 
-    Searches for libMLIR-C.so in multiple locations. This library must be
-    built using scripts/buildMlirCApi.sh as LLVM only distributes static libs.
+    This will automatically trigger the build system if the library is not found.
     """
-    # Priority order for finding the MLIR C API library
     var paths = List[Path]()
-    paths.append(Path("vendors/mlir-capi/libMLIR-C.so"))
-    paths.append(Path("vendors/llvm-current/lib/libMLIR-C.so"))
-    paths.append(Path("/usr/lib/llvm-21/lib/libMLIR-C.so"))
-    paths.append(Path("/usr/lib/llvm-20/lib/libMLIR-C.so"))
-    paths.append(Path("/usr/lib/llvm-19/lib/libMLIR-C.so"))
-    paths.append(Path("libMLIR-C.so"))
+
+    # Priority 1: Explicit path from environment
+    var explicit = getenv("MLIR_LIB_PATH", "")
+    if explicit:
+        paths.append(Path(explicit))
+
+    # Priority 2: Cache directory (ensured by the build system)
+    paths.append(_get_lib_path())
+
+    # Priority 3: System paths as fallback
+    paths.append(Path("/usr/local/lib/libMLIR-C.so"))
+    paths.append(Path("/usr/lib/libMLIR-C.so"))
+
+    # If not found in cache, ensure it's built
+    if not _is_cache_valid() and not explicit:
+        try:
+            _ = ensure_mlir_c_library()
+        except e:
+            # We continue anyway to let _find_dylib report the error if it still fails
+            print("[mlir-ffi] Warning: Automated build failed:", e)
+
     return _find_dylib["MLIR C API"](paths)
 
 
 fn _load_llvm_library() -> OwnedDLHandle:
     """Load the LLVM shared library."""
     var paths = List[Path]()
-    paths.append(Path("vendors/llvm-current/lib/libLLVM.so"))
+
+    # Try common system locations
     paths.append(Path("/usr/lib/llvm-21/lib/libLLVM.so"))
     paths.append(Path("/usr/lib/llvm-20/lib/libLLVM.so"))
     paths.append(Path("/usr/lib/llvm-19/lib/libLLVM.so"))
+    paths.append(Path("/opt/homebrew/opt/llvm/lib/libLLVM.dylib"))
     paths.append(Path("libLLVM.so"))
+
     return _find_dylib["LLVM"](paths)
 
 
@@ -150,13 +169,26 @@ fn get_library_status() -> String:
     Returns:
         A formatted string describing the library availability.
     """
-    var mlir_status = "✓ Available" if is_mlir_available() else "✗ Not found"
-    var llvm_status = "✓ Available" if is_llvm_available() else "✗ Not found"
+    var mlir_loaded = is_mlir_available()
+    var llvm_loaded = is_llvm_available()
 
-    return String(
-        "MLIR FFI Library Status:\n  MLIR C API: "
-        + mlir_status
-        + "\n  LLVM:       "
-        + llvm_status
-        + "\n"
-    )
+    var mlir_status = "✓ Available" if mlir_loaded else "✗ Not found"
+    var llvm_status = "✓ Available" if llvm_loaded else "✗ Not found"
+
+    var msg = String("MLIR FFI Status [") + get_platform() + "]:\n"
+    msg += "  MLIR C API: " + mlir_status + "\n"
+    if mlir_loaded:
+        msg += "    Path:     " + String(_get_lib_path()) + "\n"
+    msg += "  LLVM:       " + llvm_status + "\n"
+
+    return msg
+
+
+fn setup() raises:
+    """Explicitly initialize the MLIR FFI system.
+
+    This will ensure the library is built and loaded.
+    """
+    _ = ensure_mlir_c_library()
+    print("[mlir-ffi] Setup complete!")
+    print(get_library_status())
