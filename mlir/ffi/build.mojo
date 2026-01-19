@@ -105,7 +105,7 @@ fn _ensure_cache_dir():
 fn download(url: String, archive: Path):
     print("Downloading:", url)
     try:
-        _ = run("curl -L --fail --retry 3 -o " + String(archive) + " " + url)
+        _ = run("curl -L --fail --progress-bar --retry 3 -o " + String(archive) + " " + url)
     except Err:
         abort("Failed to download MLIR/LLVM package: " + String(Err))
 
