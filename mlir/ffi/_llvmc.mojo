@@ -57,7 +57,7 @@ fn _llvmc_symbol[
         )
 
 
-fn _llvmc_fn[
+fn llvmc_fn[
     FuncName: StaticString,
     RetType: AnyTrivialRegType,
     *types: AnyType,

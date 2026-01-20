@@ -59,7 +59,7 @@ fn _mlir_symbol[
         )
 
 
-fn _mlir_fn[
+fn mlirc_fn[
     FuncName: StaticString,
     RetType: AnyTrivialRegType,
     *types: AnyType,
