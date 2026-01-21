@@ -36,4 +36,3 @@ fn mlirLlvmThreadPoolDestroy(thread_pool: MlirLlvmThreadPool) -> None:
 
 struct MlirThreadPool:
     var thread_pool: MlirLlvmThreadPool
-    

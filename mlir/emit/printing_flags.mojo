@@ -1,5 +1,6 @@
 from mlir.ffi import mlirc_fn, ExternalPointer
 
+
 @register_passable("trivial")
 struct MlirOpPrintingFlags:
     var ptr: ExternalPointer
