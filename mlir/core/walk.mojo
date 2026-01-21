@@ -37,3 +37,25 @@ fn mlirOperationWalk(
     return mlirc_fn["mlirOperationWalk", NoneType._mlir_type](
         op, callback, user_data, walk_order
     )
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct MlirLogicalResult:
+    var value: Int8
+
+
+fn mlirLogicalResultIsSuccess(result: MlirLogicalResult) -> Bool:
+    return Bool(result.value != 0)
+
+
+fn mlirLogicalResultIsFailure(result: MlirLogicalResult) -> Bool:
+    return Bool(result.value == 0)
+
+
+fn mlirLogicalResultSuccess() -> MlirLogicalResult:
+    return MlirLogicalResult(1)
+
+
+fn mlirLogicalResultFailure() -> MlirLogicalResult:
+    return MlirLogicalResult(0)

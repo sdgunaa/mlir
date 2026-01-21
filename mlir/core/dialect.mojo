@@ -78,3 +78,7 @@ fn mlirDialectRegistryIsNull(registry: MlirDialectRegistry) -> Bool:
 
 fn mlirDialectRegistryDestroy(registry: MlirDialectRegistry) -> None:
     return mlirc_fn["mlirDialectRegistryDestroy", NoneType._mlir_type](registry)
+
+
+fn mlirRegisterAllDialects(registry: MlirDialectRegistry) -> None:
+    return mlirc_fn["mlirRegisterAllDialects", NoneType._mlir_type](registry)
