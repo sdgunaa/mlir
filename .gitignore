@@ -4,3 +4,6 @@
 
 # kgen generated files
 kgen*
+
+# Rules
+.cursor
