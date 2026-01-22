@@ -233,7 +233,7 @@ fn mlirTypeIsAF16(type: MlirType) -> Bool:
 
 
 fn mlirF16TypeGet(context: MlirContext) -> MlirType:
-    return mlirc_fn["mlirFloat16TypeGet", MlirType](context)
+    return mlirc_fn["mlirF16TypeGet", MlirType](context)
 
 
 fn mlirFloat32TypeGetTypeID() -> MlirTypeID:

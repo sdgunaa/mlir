@@ -43,7 +43,7 @@ fn mlirTypeEqual(type: MlirType, other: MlirType) -> Bool:
 fn mlirTypePrint(type: MlirType, mut writer: Some[Writer]):
     var buffer = _WriteBufferStack(writer)
     mlirc_fn["mlirTypePrint", NoneType._mlir_type](
-        type, UnsafePointer(to=buffer)
+        type, mlirStringCallback[buffer.W], UnsafePointer(to=buffer)
     )
     buffer.flush()
 
