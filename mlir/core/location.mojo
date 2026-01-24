@@ -1,7 +1,12 @@
 from mlir.ffi import mlirc_fn, ExternalPointer
-from mlir.core import MlirStringRef, mlirStringCallback
-from mlir.core.attribute import MlirAttribute, MlirIdentifier
-from mlir.core.context import MlirContext
+from mlir.core import MlirStringRef, mlirStringCallback, _static_from_str
+from mlir.core.attribute import (
+    MlirAttribute,
+    MlirIdentifier,
+    Attribute,
+    Identifier,
+)
+from mlir.core.context import MlirContext, Context
 from mlir.core.type import MlirTypeID
 from format._utils import _WriteBufferStack
 
@@ -179,3 +184,107 @@ fn mlirLocationPrint(location: MlirLocation, mut writer: Some[Writer]):
         location, mlirStringCallback[buffer.W], UnsafePointer(to=buffer)
     )
     buffer.flush()
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Location(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirLocation
+    var _ptr: Self.c_type
+
+    fn __init__(out self, context: Context):
+        self._ptr = mlirLocationUnknownGet(context._ptr)
+
+    fn __init__(out self, attribute: Attribute):
+        self._ptr = mlirLocationFromAttribute(attribute._ptr)
+
+    fn __init__(
+        out self, context: Context, filename: String, line: Int, col: Int
+    ):
+        self._ptr = mlirLocationFileLineColGet(
+            context._ptr, _static_from_str(filename), line, col
+        )
+
+    fn __init__(
+        out self,
+        context: Context,
+        filename: String,
+        line: Int,
+        col: Int,
+        end_line: Int,
+        end_col: Int,
+    ):
+        self._ptr = mlirLocationFileLineColRangeGet(
+            context._ptr,
+            _static_from_str(filename),
+            line,
+            col,
+            end_line,
+            end_col,
+        )
+
+    fn __init__(
+        out self,
+        context: Context,
+        filename: String,
+        child_location: Location,
+    ):
+        self._ptr = mlirLocationNameGet(
+            context._ptr,
+            _static_from_str(filename),
+            child_location._ptr,
+        )
+
+    fn is_name(self) -> Bool:
+        return mlirLocationIsAName(self._ptr)
+
+    fn name(self) -> Identifier:
+        return Identifier(mlirLocationNameGetName(self._ptr))
+
+    fn child_location(self) -> Location:
+        return Location(mlirLocationNameGetChildLoc(self._ptr))
+
+    @staticmethod
+    fn call_site(callee: Self, caller: Self) -> Self:
+        return Self(mlirLocationCallSiteGet(callee._ptr, caller._ptr))
+
+    @staticmethod
+    fn fused(
+        context: Context, var locations: List[MlirLocation], metadata: Attribute
+    ) -> Self:
+        return Self(
+            mlirLocationFusedGet(
+                context._ptr,
+                locations._len,
+                locations.steal_data(),
+                metadata._ptr,
+            )
+        )
+
+    @staticmethod
+    fn unknown(context: Context) -> Self:
+        return Self(mlirLocationUnknownGet(context._ptr))
+
+    fn __eq__(self, other: Self) -> Bool:
+        return mlirLocationEqual(self._ptr, other._ptr)
+
+    fn context(self) -> Context:
+        return Context(mlirLocationGetContext(self._ptr))
+
+    fn attribute(self) -> Attribute:
+        return Attribute(mlirLocationGetAttribute(self._ptr))
+
+    fn file_line_col_range_get_filename(self) -> Identifier:
+        return Identifier(mlirLocationFileLineColRangeGetFilename(self._ptr))
+
+    fn write_to(self, mut writer: Some[Writer]):
+        mlirLocationPrint(self._ptr, writer)
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+    fn __bool__(self) -> Bool:
+        return not mlirLocationIsNull(self._ptr)
+
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr

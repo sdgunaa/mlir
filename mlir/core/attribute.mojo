@@ -1,9 +1,9 @@
 from format._utils import _WriteBufferStack
-from mlir.core import MlirStringRef, mlirStringCallback
+from mlir.core import MlirStringRef, mlirStringCallback, _static_from_str
 from mlir.ffi import mlirc_fn, ExternalPointer
-from mlir.core.context import MlirContext
-from mlir.core.type import MlirType, MlirTypeID
-from mlir.core.dialect import MlirDialect
+from mlir.core.context import MlirContext, Context
+from mlir.core.type import MlirType, MlirTypeID, Type
+from mlir.core.dialect import MlirDialect, Dialect
 
 
 @register_passable("trivial")
@@ -91,3 +91,87 @@ fn mlirNamedAttributeGet(
     return mlirc_fn["mlirNamedAttributeGet", MlirNamedAttribute](
         name, attribute
     )
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Identifier(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirIdentifier
+    var _ptr: Self.c_type
+
+    fn __init__(out self, context: Context, identifier: String):
+        self._ptr = mlirIdentifierGet(
+            context._ptr, _static_from_str(identifier)
+        )
+
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr
+
+    fn write_to(self, mut writer: Some[Writer]):
+        writer.write(mlirIdentifierStr(self._ptr))
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Attribute(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirAttribute
+    var _ptr: Self.c_type
+
+    fn __init__(out self, context: Context, attribute: String):
+        self = Self.parse(context, attribute)
+
+    fn context(self) -> Context:
+        return mlirAttributeGetContext(self._ptr)
+
+    fn type(self) -> Type:
+        return mlirAttributeGetType(self._ptr)
+
+    fn dialect(self) -> Dialect:
+        return mlirAttributeGetDialect(self._ptr)
+
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr
+
+    fn write_to(self, mut writer: Some[Writer]):
+        mlirAttributePrint(self._ptr, writer)
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+    @staticmethod
+    fn parse(context: Context, attribute_string: String) -> Self:
+        return mlirAttributeParseGet(
+            context._ptr, _static_from_str(attribute_string)
+        )
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct NamedAttribute(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirNamedAttribute
+    var _name: Identifier
+    var _attribute: Attribute
+
+    fn __init__(out self, named_attribute: MlirNamedAttribute):
+        self._name = Identifier(named_attribute.name)
+        self._attribute = Attribute(named_attribute.attribute)
+
+    fn name(self) -> Identifier:
+        return self._name
+
+    fn attribute(self) -> Attribute:
+        return self._attribute
+
+    fn _mlir_type(self) -> Self.c_type:
+        return mlirNamedAttributeGet(self._name._ptr, self._attribute._ptr)
+
+    fn write_to(self, mut writer: Some[Writer]):
+        writer.write(self.name())
+        writer.write(":")
+        writer.write(self.attribute())
+
+    fn __str__(self) -> String:
+        return String.write(self)

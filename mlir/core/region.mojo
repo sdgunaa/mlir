@@ -1,6 +1,6 @@
 from mlir.ffi import mlirc_fn, ExternalPointer
-from mlir.core.block import MlirBlock
-from mlir.core.operation import MlirOperation
+from mlir.core.block import MlirBlock, Block
+from mlir.core.operation import MlirOperation, Operation
 
 
 @register_passable("trivial")
@@ -57,13 +57,55 @@ fn mlirRegionInsertOwnedBlockBefore(
     )
 
 
-fn mlirOperationGetFirstRegion(operation: MlirOperation) -> MlirRegion:
-    return mlirc_fn["mlirOperationGetFirstRegion", MlirRegion](operation)
-
-
 fn mlirRegionGetNextInOperation(region: MlirRegion) -> MlirRegion:
     return mlirc_fn["mlirRegionGetNextInOperation", MlirRegion](region)
 
 
 fn mlirRegionTakeBody(target: MlirRegion, source: MlirRegion):
     return mlirc_fn["mlirRegionTakeBody", NoneType._mlir_type](target, source)
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Region(MlirWrapper):
+    comptime c_type = MlirRegion
+    var _ptr: Self.c_type
+
+    fn __init__(out self, ):
+        self._ptr = mlirRegionCreate()
+    
+    fn get_first_block(self) -> Block:
+        return Block(mlirRegionGetFirstBlock(self._ptr))
+    
+    fn append_block(self, block: Block):
+        mlirRegionAppendOwnedBlock(self._ptr, block._ptr)
+    
+    fn insert_block(self, index: Int, block: Block):
+        mlirRegionInsertOwnedBlock(self._ptr, index, block._ptr)
+    
+    fn insert_block_after(self, after: Block, block: Block):
+        mlirRegionInsertOwnedBlockAfter(self._ptr, after._ptr, block._ptr)
+    
+    fn insert_block_before(self, before: Block, block: Block):
+        mlirRegionInsertOwnedBlockBefore(self._ptr, before._ptr, block._ptr)
+    
+    fn get_next_in_operation(self) -> Region:
+        return Region(mlirRegionGetNextInOperation(self._ptr))
+    
+    fn take_body(self, source: Region):
+        mlirRegionTakeBody(self._ptr, source._ptr)
+    
+    fn destroy(deinit self):
+        mlirRegionDestroy(self._ptr)
+    
+    fn __eq__(self, other: Self) -> Bool:
+        return mlirRegionEqual(self._ptr, other._ptr)
+    
+    fn __ne__(self, other: Self) -> Bool:
+        return not self.__eq__(other)
+    
+    fn __bool__(self) -> Bool:
+        return not mlirRegionIsNull(self._ptr)
+    
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr

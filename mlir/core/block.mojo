@@ -1,11 +1,11 @@
 from format._utils import _WriteBufferStack
 from mlir.ffi import mlirc_fn, ExternalPointer
 from mlir.core import MlirStringRef, mlirStringCallback
-from mlir.core.type import MlirType
-from mlir.core.location import MlirLocation
-from mlir.core.operation import MlirOperation
-from mlir.core.region import MlirRegion
-from mlir.core.value import MlirValue
+from mlir.core.type import MlirType, Type
+from mlir.core.location import MlirLocation, Location
+from mlir.core.operation import MlirOperation, Operation
+from mlir.core.region import MlirRegion, Region
+from mlir.core.value import MlirValue, Value
 
 
 @register_passable("trivial")
@@ -16,9 +16,9 @@ struct MlirBlock:
 fn mlirBlockCreate(
     num_args: Int,
     args: UnsafePointer[MlirType, MutExternalOrigin],
-    location: MlirLocation,
+    locations: UnsafePointer[MlirLocation, MutExternalOrigin],
 ) -> MlirBlock:
-    return mlirc_fn["mlirBlockCreate", MlirBlock](num_args, args, location)
+    return mlirc_fn["mlirBlockCreate", MlirBlock](num_args, args, locations)
 
 
 fn mlirBlockDestroy(block: MlirBlock):
@@ -138,3 +138,125 @@ fn mlirBlockGetNumPredecessors(block: MlirBlock) -> Int:
 
 fn mlirBlockGetPredecessor(block: MlirBlock, position: Int) -> MlirBlock:
     return mlirc_fn["mlirBlockGetPredecessor", MlirBlock](block, position)
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Block(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirBlock
+    var _ptr: Self.c_type
+
+    fn __init__(out self, var location: List[Location]):
+        self._ptr = mlirBlockCreate(
+            0,
+            UnsafePointer[MlirType, MutExternalOrigin](),
+            _InnerList(location^).unsafe_ptr(),
+        )
+
+    fn __init__(out self, var args: List[Type]):
+        var locations = List[Location](capacity=len(args))
+        for arg in args:
+            locations.append(Location.unknown(arg.context()))
+
+        self._ptr = mlirBlockCreate(
+            len(args),
+            _InnerList(args^).unsafe_ptr(),
+            _InnerList(locations^).unsafe_ptr(),
+        )
+
+    fn __init__(out self, var args: List[Type], var locations: List[Location]):
+        debug_assert(
+            len(args) == len(locations), "Each arg must have a location"
+        )
+        self._ptr = mlirBlockCreate(
+            len(args),
+            _InnerList(args^).unsafe_ptr(),
+            _InnerList(locations^).unsafe_ptr(),
+        )
+
+    fn destroy(deinit self):
+        mlirBlockDestroy(self._ptr)
+
+    fn parent_region(self) -> Region:
+        return Region(mlirBlockGetParentRegion(self._ptr))
+
+    fn next_in_region(self) -> Block:
+        return Block(mlirBlockGetNextInRegion(self._ptr))
+
+    fn parent_operation(self) -> Operation:
+        return Operation(mlirBlockGetParentOperation(self._ptr))
+
+    fn first_operation(self) -> Operation:
+        return Operation(mlirBlockGetFirstOperation(self._ptr))
+
+    fn num_arguments(self) -> Int:
+        return mlirBlockGetNumArguments(self._ptr)
+
+    fn argument(self, position: Int) -> Value:
+        return Value(mlirBlockGetArgument(self._ptr, position))
+
+    fn add_argument(self, type: Type, location: Location) -> Value:
+        return Value(mlirBlockAddArgument(self._ptr, type._ptr, location._ptr))
+
+    fn erase_argument(self, position: Int):
+        mlirBlockEraseArgument(self._ptr, position)
+
+    fn insert_argument(
+        self, position: Int, type: Type, location: Location
+    ) -> Value:
+        return Value(
+            mlirBlockInsertArgument(
+                self._ptr, position, type._ptr, location._ptr
+            )
+        )
+
+    fn num_successors(self) -> Int:
+        return mlirBlockGetNumSuccessors(self._ptr)
+
+    fn successor(self, position: Int) -> Block:
+        return Block(mlirBlockGetSuccessor(self._ptr, position))
+
+    fn num_predecessors(self) -> Int:
+        return mlirBlockGetNumPredecessors(self._ptr)
+
+    fn predecessor(self, position: Int) -> Block:
+        return Block(mlirBlockGetPredecessor(self._ptr, position))
+
+    fn append_operation(self, var operation: Operation):
+        mlirBlockAppendOwnedOperation(self._ptr, operation._ptr)
+
+    fn insert_operation(self, position: Int, var operation: Operation):
+        mlirBlockInsertOwnedOperation(self._ptr, position, operation._ptr)
+
+    fn insert_operation_after(self, after: Operation, var operation: Operation):
+        mlirBlockInsertOwnedOperationAfter(
+            self._ptr, after._ptr, operation._ptr
+        )
+
+    fn insert_operation_before(
+        self, before: Operation, var operation: Operation
+    ):
+        mlirBlockInsertOwnedOperationBefore(
+            self._ptr, before._ptr, operation._ptr
+        )
+
+    fn terminator(self) -> Operation:
+        return Operation(mlirBlockGetTerminator(self._ptr))
+
+    fn __eq__(self, other: Self) -> Bool:
+        return mlirBlockEqual(self._ptr, other._ptr)
+
+    fn __ne__(self, other: Self) -> Bool:
+        return not self.__eq__(other)
+
+    fn __bool__(self) -> Bool:
+        return not mlirBlockIsNull(self._ptr)
+
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr
+
+    fn write_to(self, mut writer: Some[Writer]):
+        mlirBlockPrint(self._ptr, writer)
+
+    fn __str__(self) -> String:
+        return String.write(self)

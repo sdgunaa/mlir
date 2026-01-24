@@ -1,8 +1,8 @@
 from format._utils import _WriteBufferStack
 from mlir.ffi import mlirc_fn, ExternalPointer
-from mlir.core import MlirStringRef, mlirStringCallback
-from mlir.core.context import MlirContext
-from mlir.core.dialect import MlirDialect
+from mlir.core import MlirStringRef, mlirStringCallback, _static_from_str
+from mlir.core.context import Context, MlirContext
+from mlir.core.dialect import MlirDialect, Dialect
 
 
 @register_passable("trivial")
@@ -50,3 +50,41 @@ fn mlirTypePrint(type: MlirType, mut writer: Some[Writer]):
 
 fn mlirTypeDump(type: MlirType):
     mlirc_fn["mlirTypeDump", NoneType._mlir_type](type)
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Type(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirType
+    var _ptr: Self.c_type
+
+    @staticmethod
+    fn parse(context: Context, type_string: String) raises -> Self:
+        var type = mlirTypeParseGet(context._ptr, _static_from_str(type_string))
+        if not type.ptr:
+            raise Error("Failed to parse type")
+        return Type(type)
+
+    fn context(self) -> Context:
+        return mlirTypeGetContext(self._ptr)
+
+    fn dialect(self) -> Dialect:
+        return mlirTypeGetDialect(self._ptr)
+
+    fn __eq__(self, other: Self) -> Bool:
+        return mlirTypeEqual(self._ptr, other._ptr)
+
+    fn __ne__(self, other: Self) -> Bool:
+        return not self.__eq__(other)
+
+    fn __bool__(self) -> Bool:
+        return not mlirTypeIsNull(self._ptr)
+
+    fn write_to(self, mut writer: Some[Writer]):
+        mlirTypePrint(self._ptr, writer)
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr

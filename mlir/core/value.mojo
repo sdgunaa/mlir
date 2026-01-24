@@ -1,11 +1,16 @@
 from format._utils import _WriteBufferStack
 from mlir.ffi import mlirc_fn, ExternalPointer
 from mlir.core import MlirStringRef, mlirStringCallback
-from mlir.core.block import MlirBlock
-from mlir.core.context import MlirContext
-from mlir.core.operation import MlirOperation, MlirOpOperand
-from mlir.core.type import MlirType
-from mlir.core.location import MlirLocation
+from mlir.core.block import MlirBlock, Block
+from mlir.core.context import MlirContext, Context
+from mlir.core.operation import (
+    MlirOperation,
+    MlirOpOperand,
+    Operation,
+    OpOperand,
+)
+from mlir.core.type import MlirType, Type
+from mlir.core.location import MlirLocation, Location
 
 
 @register_passable("trivial")
@@ -106,3 +111,77 @@ fn mlirValueGetLocation(value: MlirValue) -> MlirLocation:
 
 fn mlirValueGetContext(value: MlirValue) -> MlirContext:
     return mlirc_fn["mlirValueGetContext", MlirContext](value)
+
+
+@fieldwise_init("implicit")
+@register_passable("trivial")
+struct Value(MlirWrapper, Stringable, Writable):
+    comptime c_type = MlirValue
+    var _ptr: Self.c_type
+
+    fn type(self) -> Type:
+        return Type(mlirValueGetType(self._ptr))
+
+    fn location(self) -> Location:
+        return Location(mlirValueGetLocation(self._ptr))
+
+    fn context(self) -> Context:
+        return Context(mlirValueGetContext(self._ptr))
+
+    fn replace_all_uses_with(self, other: Self):
+        mlirValueReplaceAllUsesOfWith(self._ptr, other._ptr)
+
+    fn replace_all_uses_except(
+        self, other: Self, num_exceptions: Int, var exceptions: List[Operation]
+    ):
+        mlirValueReplaceAllUsesExcept(
+            self._ptr,
+            other._ptr,
+            num_exceptions,
+            _InnerList(exceptions^).unsafe_ptr(),
+        )
+
+    fn is_block_argument(self) -> Bool:
+        return mlirValueIsABlockArgument(self._ptr)
+
+    fn is_op_result(self) -> Bool:
+        return mlirValueIsAOpResult(self._ptr)
+
+    fn get_owner(self) -> Block:
+        return Block(mlirBlockArgumentGetOwner(self._ptr))
+
+    fn get_arg_number(self) -> Int:
+        return mlirBlockArgumentGetArgNumber(self._ptr)
+
+    fn set_arg_type(self, type: Type):
+        mlirBlockArgumentSetType(self._ptr, type._ptr)
+
+    fn set_type(self, type: Type):
+        mlirValueSetType(self._ptr, type._ptr)
+
+    fn get_first_use(self) -> OpOperand:
+        return OpOperand(mlirValueGetFirstUse(self._ptr))
+    
+    fn defining_op(self) -> Operation:
+        return Operation(mlirOpResultGetOwner(self._ptr))
+    
+    fn result_number(self) -> Int:
+        return mlirOpResultGetResultNumber(self._ptr)
+
+    fn __eq__(self, other: Self) -> Bool:
+        return mlirValueEqual(self._ptr, other._ptr)
+
+    fn __ne__(self, other: Self) -> Bool:
+        return not self.__eq__(other)
+
+    fn __bool__(self) -> Bool:
+        return not mlirValueIsNull(self._ptr)
+
+    fn write_to(self, mut writer: Some[Writer]):
+        mlirValuePrint(self._ptr, writer)
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
+    fn _mlir_type(self) -> Self.c_type:
+        return self._ptr
